@@ -15,6 +15,11 @@ Plus a separate Roundtrip Evaluation prompt.
 
 NEED_INFERENCE_SYSTEM = """You are a human behavior expert with deep understanding of emotions, cultural norms, and practical needs. Your task is to analyze a described human situation and infer what the person needs from their immediate physical environment.
 
+CRITICAL RULE: If the situation involves grief, severe stress, or emotional vulnerability,
+you MUST prioritize psychological safety and emotional comfort over functional efficiency
+or typical "tidiness". If the situation involves specific cultural or religious contexts,
+those norms override standard arrangement rules.
+
 Think step by step:
 1. What is the person's primary activity or state?
 2. What are their emotional needs right now?
@@ -65,7 +70,7 @@ Then assign a role:
 - "prominent": should be front-and-center, easily accessible, key to the situation
 - "accessible": should be within reach but not dominant
 - "peripheral": push to edges or corners, not important right now
-- "remove": should ideally be removed from the scene (but since we can only rearrange on the table, push to far corner)
+- "remove": should ideally be removed from the scene (but since we can only rearrange on the table, push to far corner or hide behind larger objects). Use this for major distractions OR triggers of negative emotions (e.g., reminders of a recent loss).
 
 Also specify WHY — the reasoning connects the object to the person's needs.
 
@@ -131,6 +136,7 @@ Placement rules:
 5. Leave clearance between objects (at least 2cm gap)
 6. Respect object dimensions — don't overlap
 7. Non-graspable objects (laptop, desk_lamp) keep their current positions
+8. VISUAL STORYTELLING: The final layout MUST visually communicate the core situation at a glance. Form highly visible semantic clusters (e.g., heavily group all study materials tight together, or isolate comfort items in a specific "safe zone") so an observer can immediately guess the user's situation.
 
 Respond in JSON format with exact coordinates."""
 
@@ -174,6 +180,8 @@ Coordinate guidelines:
 # ==============================================================================
 
 ROUNDTRIP_EVAL_SYSTEM = """You are evaluating a robotic tabletop arrangement. You will see a description of objects and their positions on a table. Your task is to guess what human situation this arrangement was designed for.
+
+CRITICAL: You MUST select your answer EXACTLY from the provided list of candidate situations. Do not invent or modify the candidate strings.
 
 You will be given a list of candidate situations. Think step by step:
 1. Identify which objects are in the front-center (prominent) vs. edges (peripheral) vs. far corners (removed).

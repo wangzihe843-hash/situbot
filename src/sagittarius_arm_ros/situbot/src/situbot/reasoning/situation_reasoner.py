@@ -87,18 +87,27 @@ class SituationReasoner:
         arrangement = self._compute_arrangement(situation, roles, available)
         trace_parts.append(f"=== ARRANGEMENT ===\n{json.dumps(arrangement, indent=2, ensure_ascii=False)}")
 
-        # Build result
+        # Build result with robust parsing
         placements = []
         role_map = {r["name"]: r.get("role", "") for r in roles.get("object_roles", [])}
         for p in arrangement.get("placements", []):
-            placements.append(Placement(
-                name=p["name"],
-                x=float(p["x"]),
-                y=float(p["y"]),
-                z=float(p.get("z", self.bounds["z_surface"])),
-                reason=p.get("reason", ""),
-                role=role_map.get(p["name"], ""),
-            ))
+            try:
+                # Force float conversion — handle LLM outputs like "0.25", "0.25m"
+                x_val = float(str(p.get("x", 0.0)).replace('m', '').strip())
+                y_val = float(str(p.get("y", 0.0)).replace('m', '').strip())
+                z_val = float(str(p.get("z", self.bounds["z_surface"])).replace('m', '').strip())
+
+                placements.append(Placement(
+                    name=p.get("name", "unknown_object"),
+                    x=x_val,
+                    y=y_val,
+                    z=z_val,
+                    reason=p.get("reason", "No reason provided"),
+                    role=role_map.get(p.get("name"), "accessible"),
+                ))
+            except (ValueError, TypeError) as e:
+                logger.error(f"Failed to parse coordinates for object {p.get('name')}: {e}")
+                continue  # skip unparseable objects, keep pipeline alive
 
         return ArrangementResult(
             situation=situation,
