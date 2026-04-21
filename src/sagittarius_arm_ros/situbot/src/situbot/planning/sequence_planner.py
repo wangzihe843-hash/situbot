@@ -16,10 +16,12 @@ class PickPlaceAction:
     sequence_order: int
     action_type: str  # "pick" or "place"
     object_name: str
+    instance_id: str
     x: float
     y: float
     z: float
     reason: str = ""
+    zone: str = ""  # qualitative zone (v2, for logging/debugging)
 
 
 class SequencePlanner:
@@ -60,6 +62,9 @@ class SequencePlanner:
         Returns:
             Ordered list of PickPlaceAction.
         """
+        def placement_key(placement):
+            return getattr(placement, "grounded_instance_id", "") or placement.name
+
         # Filter to graspable objects only
         graspable_targets = []
         for p in target_placements:
@@ -67,15 +72,16 @@ class SequencePlanner:
             if not obj_info.get("graspable", True):
                 logger.info(f"Skipping non-graspable object: {p.name}")
                 continue
-            if p.name not in current_positions:
-                logger.warning(f"Object {p.name} not in current positions, skipping")
+            key = placement_key(p)
+            if key not in current_positions and p.name not in current_positions:
+                logger.warning(f"Object {p.name} ({key}) not in current positions, skipping")
                 continue
             graspable_targets.append(p)
 
         # Sort by role priority, then by distance from current to target (nearest first)
         def sort_key(p):
             priority = self.ROLE_PRIORITY.get(getattr(p, "role", ""), 2)
-            cur = current_positions.get(p.name, (0, 0, 0))
+            cur = current_positions.get(placement_key(p), current_positions.get(p.name, (0, 0, 0)))
             dist = ((cur[0] - p.x) ** 2 + (cur[1] - p.y) ** 2) ** 0.5
             return (priority, dist)
 
@@ -112,13 +118,15 @@ class SequencePlanner:
                     logger.warning(f"Could not find collision-free position for {placement.name}")
                     continue
 
-            cur = current_positions[placement.name]
+            key = placement_key(placement)
+            cur = current_positions.get(key, current_positions[placement.name])
 
             # Pick action
             actions.append(PickPlaceAction(
                 sequence_order=seq,
                 action_type="pick",
                 object_name=placement.name,
+                instance_id=key,
                 x=cur[0], y=cur[1], z=cur[2],
                 reason=f"Pick {placement.name} from current position",
             ))
@@ -129,6 +137,7 @@ class SequencePlanner:
                 sequence_order=seq,
                 action_type="place",
                 object_name=placement.name,
+                instance_id=key,
                 x=footprint.cx, y=footprint.cy,
                 z=self.bounds["z_surface"],
                 reason=placement.reason,

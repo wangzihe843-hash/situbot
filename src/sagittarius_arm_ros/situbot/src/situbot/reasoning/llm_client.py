@@ -100,23 +100,41 @@ class DashScopeClient:
 
         raise RuntimeError(f"All {self.max_retries} attempts failed. Last error: {last_error}")
 
-    def chat_json(self, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
+    def chat_json(self, messages: List[Dict[str, str]],
+                   _json_retries: int = 2, **kwargs) -> Dict[str, Any]:
         """Chat and parse response as JSON.
 
         Automatically adds response_format for JSON mode and retries
         on parse failures.
         """
         kwargs.setdefault("response_format", {"type": "json_object"})
-        response = self.chat(messages, **kwargs)
 
-        # Strip markdown code fences if present
-        text = response.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        last_error = None
+        for attempt in range(_json_retries):
+            response = self.chat(messages, **kwargs)
 
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {e}\nRaw: {response[:500]}")
-            raise
+            # Extract JSON from response, handling markdown fences and surrounding text
+            text = response.strip()
+
+            # Try extracting from ```json ... ``` or ``` ... ``` fences first
+            import re
+            fence_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', text, re.DOTALL)
+            if fence_match:
+                text = fence_match.group(1).strip()
+            else:
+                # Try to find the outermost JSON object or array
+                for i, ch in enumerate(text):
+                    if ch in ('{', '['):
+                        text = text[i:]
+                        break
+
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as e:
+                last_error = e
+                logger.warning(f"JSON parse attempt {attempt+1}/{_json_retries} failed: {e}")
+                if attempt < _json_retries - 1:
+                    logger.info("Retrying LLM call for valid JSON...")
+
+        logger.error(f"Failed to parse JSON after {_json_retries} attempts. Raw: {response[:500]}")
+        raise last_error

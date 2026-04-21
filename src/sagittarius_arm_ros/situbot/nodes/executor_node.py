@@ -8,6 +8,8 @@ Uses sagittarius_arm and sagittarius_gripper planning groups,
 with end-effector offset and dynamic approach angles from sgr_ctrl.py.
 """
 
+import threading
+
 import rospy
 from collections import defaultdict
 
@@ -45,10 +47,13 @@ class ExecutorNode:
         )
         self.executor.initialize()
 
-        # Action buffer (collect all actions, execute in order)
+        # Action buffer (collect all actions, execute after quiet period)
         self.action_buffer = []
         self.buffer_timer = None
         self.buffer_timeout = rospy.get_param("~buffer_timeout", 2.0)
+        self._first_action_time = None
+        self._max_buffer_wait = rospy.get_param("~max_buffer_wait", 5.0)
+        self._executing = threading.Lock()
 
         # Subscriber
         self.sub = rospy.Subscriber(
@@ -61,27 +66,50 @@ class ExecutorNode:
     def action_callback(self, msg: PlannedAction):
         """Buffer incoming actions and schedule execution."""
         self.action_buffer.append(msg)
+        now = rospy.Time.now()
 
+        if self._first_action_time is None:
+            self._first_action_time = now
+
+        # Cancel any pending timer
         if self.buffer_timer:
             self.buffer_timer.shutdown()
-        self.buffer_timer = rospy.Timer(
-            rospy.Duration(self.buffer_timeout),
-            self.execute_buffered,
-            oneshot=True,
-        )
+
+        # If we've been buffering too long, execute immediately
+        elapsed = (now - self._first_action_time).to_sec()
+        if elapsed >= self._max_buffer_wait:
+            self.execute_buffered()
+        else:
+            # Otherwise reset the quiet-period timer
+            self.buffer_timer = rospy.Timer(
+                rospy.Duration(self.buffer_timeout),
+                self.execute_buffered,
+                oneshot=True,
+            )
 
     def execute_buffered(self, event=None):
         """Execute all buffered actions in sequence order."""
+        if not self._executing.acquire(blocking=False):
+            return  # another thread is already executing
+        try:
+            self._execute_buffered_inner()
+        finally:
+            self._executing.release()
+
+    def _execute_buffered_inner(self):
         if not self.action_buffer:
             return
 
         actions = sorted(self.action_buffer, key=lambda a: a.sequence_order)
         self.action_buffer = []
+        self._first_action_time = None  # reset for next batch
 
         rospy.loginfo(f"Executing {len(actions)} actions...")
 
-        # Go home first
-        rospy.loginfo("Moving to home position...")
+        # Safety: open gripper before homing in case we're holding something
+        # from a previous failed batch
+        rospy.loginfo("Safety: releasing gripper and moving to home...")
+        self.executor._gripper_open()
         self.executor.go_home()
 
         success_count = 0
@@ -90,11 +118,12 @@ class ExecutorNode:
         for action in actions:
             pos = action.pose.position
             name = action.object_name
+            label = f"{name} ({action.instance_id})" if action.instance_id else name
 
             if action.action_type == "pick":
-                success = self.executor.pick(pos.x, pos.y, pos.z, name)
+                success = self.executor.pick(pos.x, pos.y, pos.z, label)
             elif action.action_type == "place":
-                success = self.executor.place(pos.x, pos.y, pos.z, name)
+                success = self.executor.place(pos.x, pos.y, pos.z, label)
             else:
                 rospy.logwarn(f"Unknown action type: {action.action_type}")
                 continue
@@ -103,7 +132,7 @@ class ExecutorNode:
                 success_count += 1
             else:
                 fail_count += 1
-                rospy.logwarn(f"Action failed: {action.action_type} {name}, "
+                rospy.logwarn(f"Action failed: {action.action_type} {label}, "
                               "returning to home and continuing")
                 self.executor.go_home()
 

@@ -20,21 +20,31 @@ class EvaluatorNode:
     def __init__(self):
         rospy.init_node("situbot_evaluator", anonymous=False)
 
-        # Load evaluator LLM config (separate model to avoid self-bias)
+        # Load evaluator LLM config (check private ns first, then shared /situbot/ ns)
         endpoint = rospy.get_param("~evaluator_llm/endpoint",
-                                   "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        api_key = rospy.get_param("~evaluator_llm/api_key", "")
-        model = rospy.get_param("~evaluator_llm/model", "qwen-max")
-        temperature = rospy.get_param("~evaluator_llm/temperature", 0.0)
+                                   rospy.get_param("/situbot/evaluator_llm/endpoint",
+                                   "https://dashscope.aliyuncs.com/compatible-mode/v1"))
+        api_key = rospy.get_param("~evaluator_llm/api_key",
+                                  rospy.get_param("/situbot/evaluator_llm/api_key", ""))
+        model = rospy.get_param("~evaluator_llm/model",
+                                rospy.get_param("/situbot/evaluator_llm/model", "qwen-max"))
+        temperature = rospy.get_param("~evaluator_llm/temperature",
+                                      rospy.get_param("/situbot/evaluator_llm/temperature", 0.0))
         num_candidates = rospy.get_param("~evaluation/num_candidates", 5)
 
-        # Load SituBench scenarios
+        # Load SituBench scenarios (supports both YAML and JSON)
         bench_file = rospy.get_param("~situbench_file", "")
         scenarios = []
         if bench_file:
             with open(bench_file) as f:
-                data = yaml.safe_load(f)
-            scenarios = data.get("scenarios", [])
+                if bench_file.endswith(".json"):
+                    import json
+                    data = json.load(f)
+                    # JSON format: list of scenario dicts directly
+                    scenarios = data if isinstance(data, list) else data.get("scenarios", [])
+                else:
+                    data = yaml.safe_load(f)
+                    scenarios = data.get("scenarios", [])
 
         # Initialize evaluator
         eval_llm = DashScopeClient(
@@ -79,14 +89,14 @@ class EvaluatorNode:
             resp.reasoning = "No scene data available"
             return resp
 
+        # Use explicit ground_truth field if provided; fall back to [0] for
+        # backwards compatibility with older service callers.
         if not req.candidate_situations:
             rospy.logerr("No candidate situations provided")
             resp.reasoning = "No candidates provided"
             return resp
 
-        # Use the first candidate as "ground truth" for the roundtrip test
-        # (in practice, the caller knows which is ground truth)
-        ground_truth = req.candidate_situations[0]
+        ground_truth = req.ground_truth_situation or req.candidate_situations[0]
 
         result = self.evaluator.evaluate(
             ground_truth_situation=ground_truth,

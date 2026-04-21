@@ -15,6 +15,7 @@ from situbot.msg import DetectedObjects, ArrangementPlan, ObjectPlacement
 from situbot.srv import GetArrangement, GetArrangementResponse
 from situbot.reasoning.llm_client import DashScopeClient
 from situbot.reasoning.situation_reasoner import SituationReasoner
+from situbot.perception.scene_description import ground_placements_to_scene
 
 
 class ReasoningNode:
@@ -23,13 +24,18 @@ class ReasoningNode:
     def __init__(self):
         rospy.init_node("situbot_reasoning", anonymous=False)
 
-        # Load LLM config
+        # Load LLM config (check private ns first, then shared /situbot/ ns)
         endpoint = rospy.get_param("~llm/endpoint",
-                                   "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        api_key = rospy.get_param("~llm/api_key", "")
-        model = rospy.get_param("~llm/model", "qwen-plus")
-        temperature = rospy.get_param("~llm/temperature", 0.3)
-        max_tokens = rospy.get_param("~llm/max_tokens", 2048)
+                                   rospy.get_param("/situbot/llm/endpoint",
+                                   "https://dashscope.aliyuncs.com/compatible-mode/v1"))
+        api_key = rospy.get_param("~llm/api_key",
+                                  rospy.get_param("/situbot/llm/api_key", ""))
+        model = rospy.get_param("~llm/model",
+                                rospy.get_param("/situbot/llm/model", "qwen-plus"))
+        temperature = rospy.get_param("~llm/temperature",
+                                      rospy.get_param("/situbot/llm/temperature", 0.3))
+        max_tokens = rospy.get_param("~llm/max_tokens",
+                                     rospy.get_param("/situbot/llm/max_tokens", 2048))
 
         if not api_key or api_key == "sk-REPLACE_WITH_YOUR_KEY":
             rospy.logwarn("No valid DashScope API key configured!")
@@ -37,10 +43,12 @@ class ReasoningNode:
         # Load workspace bounds
         self.workspace = {
             "x_min": rospy.get_param("~workspace/table/x_min", 0.15),
-            "x_max": rospy.get_param("~workspace/table/x_max", 0.45),
-            "y_min": rospy.get_param("~workspace/table/y_min", -0.20),
-            "y_max": rospy.get_param("~workspace/table/y_max", 0.20),
-            "z_surface": rospy.get_param("~workspace/table/z_surface", 0.02),
+            "x_max": rospy.get_param("~workspace/table/x_max", 0.75),
+            "y_min": rospy.get_param("~workspace/table/y_min", -0.40),
+            "y_max": rospy.get_param("~workspace/table/y_max", 0.40),
+            "z_min": rospy.get_param("~workspace/table/z_min", 0.00),
+            "z_max": rospy.get_param("~workspace/table/z_max", 0.60),
+            "z_surface": rospy.get_param("~workspace/table/z_surface", 0.00),
         }
 
         # Load object catalog
@@ -62,10 +70,15 @@ class ReasoningNode:
             llm_client=llm_client,
             workspace_bounds=self.workspace,
             object_catalog=self.object_catalog,
+            use_zone_placement=rospy.get_param(
+                "~vcage_enhancements/use_zone_placement", True
+            ),
         )
 
         # Latest detected objects (updated by subscriber)
         self.latest_objects = []
+        self.latest_detected_objects = []
+        self.latest_scene_description = ""
 
         # Subscriber for detected objects
         self.sub = rospy.Subscriber(
@@ -87,7 +100,16 @@ class ReasoningNode:
 
     def objects_callback(self, msg: DetectedObjects):
         """Update latest detected objects."""
-        self.latest_objects = [obj.name for obj in msg.objects]
+        self.latest_detected_objects = list(msg.objects)
+        self.latest_scene_description = msg.scene_description
+        # Reasoning uses catalog names; keep them unique while preserving order.
+        seen = set()
+        self.latest_objects = []
+        for obj in msg.objects:
+            if obj.name in seen:
+                continue
+            seen.add(obj.name)
+            self.latest_objects.append(obj.name)
 
     def handle_get_arrangement(self, req):
         """Service handler: generate arrangement for a situation."""
@@ -107,17 +129,28 @@ class ReasoningNode:
             plan = ArrangementPlan()
             plan.header.stamp = rospy.Time.now()
             plan.situation = result.situation
+            plan.scene_description = self.latest_scene_description
             plan.reasoning_trace = result.reasoning_trace
 
-            for p in result.placements:
+            grounding_infos = ground_placements_to_scene(
+                result.placements,
+                self.latest_detected_objects,
+            )
+
+            for p, grounding in zip(result.placements, grounding_infos):
                 placement_msg = ObjectPlacement()
                 placement_msg.name = p.name
+                placement_msg.grounded_instance_id = grounding.instance_id
+                placement_msg.grounded = grounding.grounded
                 placement_msg.target_pose = Pose(
                     position=Point(x=p.x, y=p.y, z=p.z),
                     orientation=Quaternion(x=0, y=0.707, z=0, w=0.707),  # top-down
                 )
                 placement_msg.reason = p.reason
+                placement_msg.grounding_note = grounding.note
                 plan.placements.append(placement_msg)
+                if (not grounding.grounded) or ("verify calibration" in grounding.note):
+                    plan.grounding_warnings.append(grounding.note)
 
             resp.plan = plan
             resp.success = True

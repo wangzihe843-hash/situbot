@@ -110,10 +110,79 @@ Example for exam preparation with objects [textbook, phone, mug, tissue_box]:
 
 
 # ==============================================================================
-# STAGE 3: SPATIAL ARRANGEMENT
+# STAGE 3: SPATIAL ARRANGEMENT (Zone-Based)
+# ==============================================================================
+# Design rationale (V-CAGE, arXiv:2604.09036 §III-A2):
+# LLMs are poor at precise numerical reasoning. Instead of asking for exact
+# (x, y) coordinates, we ask for qualitative zone names and convert to
+# coordinates programmatically via ZoneMapper + PlacementOptimiser.
 # ==============================================================================
 
-SPATIAL_ARRANGEMENT_SYSTEM = """You are a precise spatial planner for a robotic arm. Given object roles and a table workspace, you determine exact (x, y) coordinates for each object placement.
+SPATIAL_ARRANGEMENT_SYSTEM = """You are a spatial planner for a robotic arm. Given object roles and a table divided into zones, you assign each object to the most appropriate zone.
+
+The table is divided into a 3×3 grid of zones (from the person's perspective):
+
+  BACK (far from person):    back-left    |  back-center   |  back-right
+  MIDDLE:                    mid-left     |  center        |  mid-right
+  FRONT (close to person):   front-left   |  front-center  |  front-right
+
+Placement rules:
+1. "prominent" objects → front-center or center (easily accessible, visually dominant)
+2. "accessible" objects → front-left, front-right, mid-left, or mid-right (within reach)
+3. "peripheral" objects → back-left, back-center, or back-right (out of the way)
+4. "remove" objects → back-right or back-left (as far from the person as possible)
+5. Group related objects in the SAME or ADJACENT zones (e.g., study materials together)
+6. Non-graspable objects (laptop, desk_lamp) keep their current zones; assign them but note they cannot be moved.
+7. VISUAL STORYTELLING: Zone assignments MUST visually communicate the situation at a glance. Cluster semantically related objects tightly (same zone), isolate removed objects clearly.
+8. Do NOT put more than 3 objects in a single zone — spread to adjacent zones if needed.
+
+Do NOT output coordinates. Output zone names only. The robot's planner will convert zones to exact positions.
+
+Respond in JSON format."""
+
+SPATIAL_ARRANGEMENT_USER = """Situation: "{situation}"
+
+Object roles and reasoning:
+{roles_json}
+
+Available zones (from person's viewpoint):
+  back-left, back-center, back-right
+  mid-left, center, mid-right
+  front-left, front-center, front-right
+
+Return a JSON object:
+{{
+  "zone_assignments": [
+    {{
+      "name": "object_name",
+      "zone": "front-center",
+      "role": "prominent",
+      "reason": "why this zone for this object in this situation"
+    }}
+  ],
+  "layout_description": "one-line description of the overall layout",
+  "clustering_notes": "which objects are intentionally grouped together and why",
+  "non_graspable_note": "list any objects that cannot be moved by the robot"
+}}
+
+Example for exam preparation:
+{{
+  "zone_assignments": [
+    {{"name": "textbook", "zone": "front-center", "role": "prominent", "reason": "core study material, needs to be open and centered"}},
+    {{"name": "notebook", "zone": "front-left", "role": "prominent", "reason": "note-taking beside textbook"}},
+    {{"name": "highlighter_set", "zone": "front-left", "role": "accessible", "reason": "grouped with notebook for quick access"}},
+    {{"name": "mug", "zone": "mid-right", "role": "accessible", "reason": "warm drink within reach, dominant hand side"}},
+    {{"name": "phone", "zone": "back-right", "role": "remove", "reason": "major distraction, banished to far corner"}}
+  ],
+  "layout_description": "Study battle station: materials front-center, comfort on the side, distractions banished",
+  "clustering_notes": "textbook+notebook+highlighters form a study cluster in front; mug+snacks on mid-right as comfort zone",
+  "non_graspable_note": "desk_lamp stays in its current position"
+}}"""
+
+
+# --- Legacy exact-coordinate prompt (kept for ablation experiments) ---
+
+SPATIAL_ARRANGEMENT_SYSTEM_LEGACY = """You are a precise spatial planner for a robotic arm. Given object roles and a table workspace, you determine exact (x, y) coordinates for each object placement.
 
 Think step by step:
 1. Start with "prominent" objects — place them in the center-front zone first.
@@ -140,7 +209,7 @@ Placement rules:
 
 Respond in JSON format with exact coordinates."""
 
-SPATIAL_ARRANGEMENT_USER = """Situation: "{situation}"
+SPATIAL_ARRANGEMENT_USER_LEGACY = """Situation: "{situation}"
 
 Object roles and reasoning:
 {roles_json}

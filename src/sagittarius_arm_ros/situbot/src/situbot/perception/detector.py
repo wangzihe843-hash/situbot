@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Object detection using YOLO-World for open-vocabulary detection.
+"""Open-vocabulary object detection for SituBot.
 
-YOLO-World API reference:
-  https://github.com/ultralytics/ultralytics/blob/main/docs/en/models/yolo-world.md
-  pip install ultralytics
+The detector is intentionally strict about model files. On RB8 and other
+offline robot deployments, a hidden first-run download can make perception look
+like it has frozen. Pass local weights through ROS params or environment
+variables instead.
 """
 
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -17,24 +19,26 @@ import numpy as np
 class DetectedObject:
     """A single detected object with position and dimensions."""
     name: str
-    x: float  # center x in world frame (meters)
-    y: float  # center y in world frame (meters)
-    z: float  # center z in world frame (meters)
+    x: float
+    y: float
+    z: float
     confidence: float
     width: float = 0.0
     depth: float = 0.0
     height: float = 0.0
-    bbox_pixels: Tuple[int, int, int, int] = (0, 0, 0, 0)  # x1, y1, x2, y2
+    bbox_pixels: Tuple[int, int, int, int] = (0, 0, 0, 0)
+    instance_id: str = ""
+    pixel_x: float = 0.0
+    pixel_y: float = 0.0
+    zone: str = ""
 
 
 class ObjectDetector:
-    """Open-vocabulary object detector using YOLO-World.
+    """Open-vocabulary detector for catalog objects.
 
-    Detects objects from the catalog in a camera image and estimates
-    their 3D positions using depth information or known object sizes.
-
-    Install: pip install ultralytics
-    Weights auto-download on first use.
+    Supported backends:
+    - yolo_world: ultralytics YOLO-World with a local .pt file.
+    - grounding_dino: GroundingDINO with local config and checkpoint files.
     """
 
     def __init__(self, model_name: str = "yolo_world",
@@ -46,20 +50,13 @@ class ObjectDetector:
                  coordinate_mapping_mode: str = "workspace_linear",
                  linear_regression: Optional[Dict[str, float]] = None,
                  min_bbox_area: float = 400.0,
-                 max_detections_per_class: int = 3):
-        """
-        Args:
-            model_name: Detection model to use ("yolo_world" or "grounding_dino").
-            confidence_threshold: Minimum confidence to accept a detection.
-            nms_threshold: Non-maximum suppression IoU threshold.
-            object_names: List of object names to detect (open vocabulary).
-            object_catalog: Full object metadata from objects.yaml.
-            workspace_bounds: Table bounds used by the workspace fallback mapper.
-            coordinate_mapping_mode: "workspace_linear" or "vision_config_linear".
-            linear_regression: Dict with k1, b1, k2, b2 from calibration.
-            min_bbox_area: Minimum bbox area in pixels to keep a detection.
-            max_detections_per_class: Upper bound on detections kept per class.
-        """
+                 max_detections_per_class: int = 3,
+                 model_weights: str = "",
+                 allow_model_download: bool = False,
+                 grounding_dino_config: str = "",
+                 grounding_dino_weights: str = "",
+                 grounding_dino_text_threshold: float = 0.25,
+                 grounding_dino_device: str = "cpu"):
         self.model_name = model_name
         self.confidence_threshold = confidence_threshold
         self.nms_threshold = nms_threshold
@@ -74,49 +71,49 @@ class ObjectDetector:
         self.linear_regression = linear_regression
         self.min_bbox_area = float(min_bbox_area)
         self.max_detections_per_class = max(1, int(max_detections_per_class))
+
+        self.model_weights = model_weights
+        self.allow_model_download = self._as_bool(allow_model_download)
+        self.grounding_dino_config = grounding_dino_config
+        self.grounding_dino_weights = grounding_dino_weights
+        self.grounding_dino_text_threshold = float(grounding_dino_text_threshold)
+        self.grounding_dino_device = grounding_dino_device
+        self._grounding_transform = None
+        self._grounding_prompt = self._build_grounding_prompt(self.object_names)
+
         self.model = None
+        self._model_load_failed = False
+        self._model_fail_time = 0.0
+        self._model_retry_interval = 60.0
 
     def load_model(self):
-        """Load the detection model into memory."""
+        """Load the selected detection model."""
         if self.model_name == "yolo_world":
-            # YOLO-World via ultralytics — direct copy from official docs
-            # https://github.com/ultralytics/ultralytics/blob/main/docs/en/models/yolo-world.md
             from ultralytics import YOLOWorld
-            self.model = YOLOWorld("yolov8s-worldv2.pt")  # auto-downloads 37.7 mAP
+            weights = self._resolve_yolo_world_weights()
+            self.model = YOLOWorld(weights)
             self.model.set_classes(self.object_names)
         elif self.model_name == "grounding_dino":
-            # TODO: GroundingDINO — different API, heavier install
-            # https://github.com/IDEA-Research/GroundingDINO
-            # https://github.com/IDEA-Research/Grounded-SAM-2 (with segmentation)
-            #
-            # from groundingdino.util.inference import load_model, predict
-            # config_path = "GroundingDINO_SwinT_OGC.py"
-            # weights_path = "groundingdino_swint_ogc.pth"
-            # self.model = load_model(config_path, weights_path)
-            #
-            # Detection call differs:
-            #   text_prompt = " . ".join(self.object_names)  # dot-separated
-            #   boxes, logits, phrases = predict(
-            #       self.model, image, text_prompt,
-            #       box_threshold=self.confidence_threshold, text_threshold=0.25
-            #   )
-            raise NotImplementedError("GroundingDINO not yet integrated")
+            self._load_grounding_dino()
         else:
-            raise ValueError(f"Unknown model: {self.model_name}")
+            raise ValueError(f"Unknown detection model: {self.model_name}")
 
     def detect(self, image: np.ndarray,
                depth_image: Optional[np.ndarray] = None) -> List[DetectedObject]:
-        """Detect objects in an image.
-
-        Args:
-            image: BGR image from camera, shape (H, W, 3).
-            depth_image: Optional depth image, shape (H, W), in meters.
-
-        Returns:
-            List of DetectedObject with positions in world coordinates.
-        """
+        """Detect objects in a BGR camera image."""
         if self.model is None:
-            self.load_model()
+            if self._model_load_failed:
+                import time
+                if (time.time() - self._model_fail_time) < self._model_retry_interval:
+                    return []
+                self._model_load_failed = False
+            try:
+                self.load_model()
+            except Exception:
+                import time
+                self._model_load_failed = True
+                self._model_fail_time = time.time()
+                raise
 
         raw_detections = self._run_detection(image)
         filtered = self._limit_per_class(self._apply_nms(raw_detections))
@@ -137,44 +134,179 @@ class ObjectDetector:
                 depth=depth,
                 height=height,
                 bbox_pixels=tuple(det["bbox"]),
+                pixel_x=(det["bbox"][0] + det["bbox"][2]) / 2.0,
+                pixel_y=(det["bbox"][1] + det["bbox"][3]) / 2.0,
             ))
         return results
 
     def _run_detection(self, image: np.ndarray) -> List[dict]:
-        """Run raw detection on image.
-
-        Returns:
-            List of dicts with keys: name, confidence, bbox (x1,y1,x2,y2).
-        """
         if self.model_name == "yolo_world":
-            # YOLO-World inference — direct from ultralytics API
-            results = self.model.predict(
-                image, conf=self.confidence_threshold, verbose=False
-            )
-            detections = []
-            for box in results[0].boxes:
-                cls_id = int(box.cls.item() if hasattr(box.cls, "item") else box.cls)
-                name = (
-                    self.object_names[cls_id]
-                    if cls_id < len(self.object_names)
-                    else f"class_{cls_id}"
-                )
-                if self.known_names and name not in self.known_names:
-                    continue
-
-                bbox = self._clip_bbox(box.xyxy[0].tolist(), image.shape)
-                if bbox is None or self._bbox_area(bbox) < self.min_bbox_area:
-                    continue
-
-                detections.append({
-                    "name": name,
-                    "confidence": float(
-                        box.conf.item() if hasattr(box.conf, "item") else box.conf
-                    ),
-                    "bbox": bbox,
-                })
-            return detections
+            return self._run_yolo_world(image)
+        if self.model_name == "grounding_dino":
+            return self._run_grounding_dino(image)
         return []
+
+    def _run_yolo_world(self, image: np.ndarray) -> List[dict]:
+        results = self.model.predict(
+            image, conf=self.confidence_threshold, verbose=False
+        )
+        detections = []
+        for box in results[0].boxes:
+            cls_id = int(box.cls.item() if hasattr(box.cls, "item") else box.cls)
+            name = (
+                self.object_names[cls_id]
+                if cls_id < len(self.object_names)
+                else f"class_{cls_id}"
+            )
+            if self.known_names and name not in self.known_names:
+                continue
+
+            bbox = self._clip_bbox(box.xyxy[0].tolist(), image.shape)
+            if bbox is None or self._bbox_area(bbox) < self.min_bbox_area:
+                continue
+
+            detections.append({
+                "name": name,
+                "confidence": float(
+                    box.conf.item() if hasattr(box.conf, "item") else box.conf
+                ),
+                "bbox": bbox,
+            })
+        return detections
+
+    def _resolve_yolo_world_weights(self) -> str:
+        explicit = self.model_weights or os.environ.get("YOLO_WORLD_WEIGHTS", "")
+        if explicit:
+            return self._require_file(explicit, "YOLO-World weights")
+
+        local_candidates = [
+            "yolov8s-worldv2.pt",
+            os.path.join(os.getcwd(), "yolov8s-worldv2.pt"),
+            os.path.join(os.getcwd(), "models", "yolov8s-worldv2.pt"),
+        ]
+        for candidate in local_candidates:
+            expanded = os.path.abspath(os.path.expanduser(os.path.expandvars(candidate)))
+            if os.path.isfile(expanded):
+                return expanded
+
+        if self.allow_model_download:
+            return "yolov8s-worldv2.pt"
+
+        raise FileNotFoundError(
+            "YOLO-World weights were not found. Put yolov8s-worldv2.pt on RB8 "
+            "and pass model_weights:=/path/to/yolov8s-worldv2.pt, set "
+            "YOLO_WORLD_WEIGHTS, or use allow_model_download:=true only when "
+            "network access is available."
+        )
+
+    def _load_grounding_dino(self):
+        config_path = self._require_file(
+            self.grounding_dino_config, "GroundingDINO config"
+        )
+        weights_path = self._require_file(
+            self.grounding_dino_weights, "GroundingDINO weights"
+        )
+        try:
+            from groundingdino.datasets import transforms as T
+            from groundingdino.util.inference import load_model
+        except ImportError as exc:
+            raise ImportError(
+                "GroundingDINO is not installed. Install it on RB8 or use "
+                "detection_model:=yolo_world with local YOLO-World weights."
+            ) from exc
+
+        self._grounding_transform = T.Compose([
+            T.RandomResize([800], max_size=1333),
+            T.ToTensor(),
+            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ])
+        self.model = load_model(
+            config_path,
+            weights_path,
+            device=self.grounding_dino_device,
+        )
+
+    def _run_grounding_dino(self, image: np.ndarray) -> List[dict]:
+        if self._grounding_transform is None:
+            raise RuntimeError("GroundingDINO transform was not initialized")
+
+        try:
+            from PIL import Image
+            from groundingdino.util.inference import predict
+        except ImportError as exc:
+            raise ImportError("GroundingDINO runtime dependencies are missing") from exc
+
+        height, width = image.shape[:2]
+        image_pil = Image.fromarray(image[:, :, ::-1])
+        image_tensor, _ = self._grounding_transform(image_pil, None)
+
+        boxes, logits, phrases = predict(
+            model=self.model,
+            image=image_tensor,
+            caption=self._grounding_prompt,
+            box_threshold=self.confidence_threshold,
+            text_threshold=self.grounding_dino_text_threshold,
+            device=self.grounding_dino_device,
+        )
+
+        if hasattr(boxes, "detach"):
+            boxes = boxes.detach().cpu().numpy()
+        if hasattr(logits, "detach"):
+            logits = logits.detach().cpu().numpy()
+
+        detections = []
+        scale = np.array([width, height, width, height], dtype=float)
+        for box, score, phrase in zip(boxes, logits, phrases):
+            name = self._match_grounding_phrase(str(phrase))
+            if not name:
+                continue
+            cx, cy, box_w, box_h = box * scale
+            bbox = self._clip_bbox(
+                [
+                    cx - box_w / 2.0,
+                    cy - box_h / 2.0,
+                    cx + box_w / 2.0,
+                    cy + box_h / 2.0,
+                ],
+                image.shape,
+            )
+            if bbox is None or self._bbox_area(bbox) < self.min_bbox_area:
+                continue
+            detections.append({
+                "name": name,
+                "confidence": float(score),
+                "bbox": bbox,
+            })
+        return detections
+
+    @staticmethod
+    def _require_file(path: str, description: str) -> str:
+        if not path:
+            raise FileNotFoundError(f"{description} path is empty")
+        expanded = os.path.abspath(os.path.expanduser(os.path.expandvars(path)))
+        if not os.path.isfile(expanded):
+            raise FileNotFoundError(f"{description} not found: {expanded}")
+        return expanded
+
+    @staticmethod
+    def _as_bool(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+
+    @staticmethod
+    def _build_grounding_prompt(object_names: List[str]) -> str:
+        return " . ".join(name.replace("_", " ") for name in object_names) + " ."
+
+    def _match_grounding_phrase(self, phrase: str) -> Optional[str]:
+        normalized = phrase.lower().replace("-", " ").replace("_", " ")
+        for name in sorted(self.object_names, key=len, reverse=True):
+            readable = name.lower().replace("_", " ")
+            if readable in normalized or name.lower() in normalized:
+                return name
+        return None
 
     def _apply_nms(self, detections: List[dict]) -> List[dict]:
         """Apply non-maximum suppression to remove overlapping detections."""
@@ -241,17 +373,8 @@ class ObjectDetector:
     def _estimate_position(self, bbox: list, name: str,
                            depth_image: Optional[np.ndarray],
                            image_shape: tuple) -> Tuple[float, float, float]:
-        """Estimate 3D world position from 2D bbox.
-
-        Args:
-            bbox: [x1, y1, x2, y2] in pixels.
-            name: Object name (for known-size estimation).
-            depth_image: Depth map if available.
-            image_shape: (H, W, C) of the color image.
-
-        Returns:
-            (x, y, z) in robot base frame.
-        """
+        """Estimate robot-frame tabletop position from a 2D bounding box."""
+        del name
         cx = (bbox[0] + bbox[2]) / 2
         cy = (bbox[1] + bbox[3]) / 2
 
@@ -261,31 +384,10 @@ class ObjectDetector:
                 int(bbox[0]):int(bbox[2])
             ]
             valid = depth_region[depth_region > 0]
-            z = float(np.median(valid)) if valid.size > 0 else 0.02
+            z = float(np.median(valid)) if valid.size > 0 else 0.0
         else:
-            z = 0.02  # Default: table surface
+            z = 0.0
 
-        # TODO: Use calibrated camera intrinsics or linear regression for pixel→world.
-        #
-        # Option A — Linear regression (from grasp_once.py in sagittarius_perception):
-        #   Calibrate k1, b1, k2, b2 values for your camera setup, then:
-        #   real_x = k1 * pixel_y + b1
-        #   real_y = k2 * pixel_x + b2
-        #   Calibration config stored in YAML (vision_config param).
-        #   See: sagittarius_perception/sagittarius_object_color_detector/nodes/grasp_once.py
-        #
-        # Option B — Camera intrinsics via ROS (preferred for new setups):
-        #   from sensor_msgs.msg import CameraInfo
-        #   import image_geometry
-        #   cam_info = rospy.wait_for_message("/camera/color/camera_info", CameraInfo)
-        #   cam_model = image_geometry.PinholeCameraModel()
-        #   cam_model.fromCameraInfo(cam_info)
-        #   ray = cam_model.projectPixelTo3dRay((cx, cy))
-        #   point_3d = [r * depth for r in ray]
-        #   See: https://github.com/ros-perception/vision_opencv (image_geometry)
-        #   See: https://github.com/IntelRealSense/realsense-ros (if using RealSense)
-        #
-        # Fallback: simple linear mapping (adequate for Gazebo top-down camera)
         use_regression = (
             self.coordinate_mapping_mode == "vision_config_linear"
             and self.linear_regression is not None

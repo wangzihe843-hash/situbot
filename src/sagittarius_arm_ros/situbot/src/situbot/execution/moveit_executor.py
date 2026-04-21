@@ -116,6 +116,7 @@ class MoveItExecutor:
         self.arm_group.set_named_target('home')
         success = self.arm_group.go(wait=True)
         self.arm_group.stop()
+        self.arm_group.clear_pose_targets()
         rospy.sleep(1)
         logger.info(f"go_home: {'success' if success else 'failed'}")
         return success
@@ -128,11 +129,12 @@ class MoveItExecutor:
         """
         import rospy
         self.go_home()
+        self._gripper_open()  # release any held object BEFORE compacting
         self.arm_group.set_named_target('sleep')
         success = self.arm_group.go(wait=True)
         self.arm_group.stop()
+        self.arm_group.clear_pose_targets()
         rospy.sleep(1)
-        self._gripper_open()
         return success
 
     def pick(self, x: float, y: float, z: float,
@@ -275,10 +277,12 @@ class MoveItExecutor:
 
         if len(plan.joint_trajectory.points) == 0:
             logger.warning(f"No plan found for pose ({x:.3f}, {y:.3f}, {z:.3f})")
+            self.arm_group.clear_pose_targets()
             return False
 
         self.arm_group.execute(plan, wait=True)
         self.arm_group.stop()
+        self.arm_group.clear_pose_targets()
         rospy.sleep(wait_time)
         return True
 
@@ -339,11 +343,18 @@ class MoveItExecutor:
         b = self.ARM_HALF_LENGTH
         c = math.sqrt(x * x + y * y + z * z)
 
+        if c < 1e-6:
+            # Target at origin — no meaningful orientation
+            return (0.0, 0.0, 0.0)
+
         if a + b <= c:
             # Triangle inequality fails — target at or beyond reach
             pitch = 0.0
         else:
-            pitch = math.acos((a * a - b * b - c * c) / (-2 * b * c)) - math.asin(z / c)
+            cos_arg = (a * a - b * b - c * c) / (-2 * b * c)
+            cos_arg = max(-1.0, min(1.0, cos_arg))  # clamp for float imprecision
+            sin_arg = max(-1.0, min(1.0, z / c))
+            pitch = math.acos(cos_arg) - math.asin(sin_arg)
             pitch = max(0.0, min(1.57, pitch))
 
         return (roll, pitch, yaw)

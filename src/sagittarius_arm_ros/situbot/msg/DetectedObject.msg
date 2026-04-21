@@ -1,3 +1,4 @@
+string instance_id
 string name
 float64 x
 float64 y
@@ -6,3 +7,10 @@ float64 confidence
 float64 width
 float64 depth
 float64 height
+int32 bbox_x1
+int32 bbox_y1
+int32 bbox_x2
+int32 bbox_y2
+float64 pixel_x
+float64 pixel_y
+string zone

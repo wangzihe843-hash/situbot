@@ -19,6 +19,8 @@
   <include file="$(find situbot)/launch/situbot_full.launch">
     <arg name="api_key" value="$(arg api_key)" />
     <arg name="model" value="$(arg model)" />
+    <arg name="start_usb_cam" value="false" />
+    <arg name="camera_topic" value="/camera/color/image_raw" />
   </include>
 
 </launch>

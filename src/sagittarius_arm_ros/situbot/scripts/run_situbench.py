@@ -28,6 +28,10 @@ from situbot.evaluation.metrics import compute_metrics
 def main():
     parser = argparse.ArgumentParser(description="Run SituBench evaluation")
     parser.add_argument("--api-key", type=str, default=os.environ.get("DASHSCOPE_API_KEY", ""))
+    parser.add_argument("--eval-api-key", type=str, default="",
+                        help="Separate API key for evaluator LLM (default: same as --api-key)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducible distractor selection")
     parser.add_argument("--model", type=str, default="qwen-plus")
     parser.add_argument("--eval-model", type=str, default="qwen-max")
     parser.add_argument("--endpoint", type=str,
@@ -62,9 +66,10 @@ def main():
 
     # Setup
     workspace = {
-        "x_min": 0.15, "x_max": 0.45,
-        "y_min": -0.20, "y_max": 0.20,
-        "z_surface": 0.02,
+        "x_min": 0.15, "x_max": 0.75,
+        "y_min": -0.40, "y_max": 0.40,
+        "z_min": 0.00, "z_max": 0.60,
+        "z_surface": 0.00,
     }
 
     reasoning_llm = DashScopeClient(
@@ -72,7 +77,7 @@ def main():
         model=args.model, temperature=0.3,
     )
     eval_llm = DashScopeClient(
-        endpoint=args.endpoint, api_key=args.api_key,
+        endpoint=args.endpoint, api_key=args.eval_api_key or args.api_key,
         model=args.eval_model, temperature=0.0,
     )
     reasoner = SituationReasoner(
@@ -83,6 +88,7 @@ def main():
         evaluator_llm=eval_llm,
         all_scenarios=scenarios,
         num_candidates=args.num_candidates,
+        seed=args.seed,
     )
 
     # Create output directory

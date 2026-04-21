@@ -95,8 +95,8 @@ def pixel_to_world(px: float, py: float, depth: float,
     # Fallback: linear mapping from pixel to workspace bounds
     if workspace_bounds is None:
         workspace_bounds = {
-            "x_min": 0.15, "x_max": 0.45,
-            "y_min": -0.20, "y_max": 0.20,
+            "x_min": 0.15, "x_max": 0.75,
+            "y_min": -0.40, "y_max": 0.40,
         }
 
     b = workspace_bounds
@@ -157,8 +157,8 @@ def world_to_pixel(x: float, y: float, z: float,
 
     if workspace_bounds is None:
         workspace_bounds = {
-            "x_min": 0.15, "x_max": 0.45,
-            "y_min": -0.20, "y_max": 0.20,
+            "x_min": 0.15, "x_max": 0.75,
+            "y_min": -0.40, "y_max": 0.40,
         }
 
     b = workspace_bounds

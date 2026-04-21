@@ -7,12 +7,17 @@ from typing import List, Tuple, Optional
 
 @dataclass
 class ObjectFootprint:
-    """2D footprint of an object on the table."""
+    """2D footprint of an object on the table.
+
+    Convention (matches objects.yaml and placement_optimizer):
+      width  = catalog 'w' = left-right extent = Y-axis
+      depth  = catalog 'd' = front-back extent = X-axis
+    """
     name: str
-    cx: float  # center x
-    cy: float  # center y
-    width: float  # extent along x
-    depth: float  # extent along y
+    cx: float  # center x (front-back axis)
+    cy: float  # center y (left-right axis)
+    width: float  # extent along Y-axis (left-right, from catalog 'w')
+    depth: float  # extent along X-axis (front-back, from catalog 'd')
     min_clearance: float = 0.02  # minimum gap to other objects
 
 
@@ -50,9 +55,10 @@ class CollisionChecker:
             True if within bounds.
         """
         b = self.bounds
-        hw, hd = obj.width / 2, obj.depth / 2
-        return (b["x_min"] <= obj.cx - hw and obj.cx + hw <= b["x_max"] and
-                b["y_min"] <= obj.cy - hd and obj.cy + hd <= b["y_max"])
+        hx = obj.depth / 2   # half X-extent (from catalog 'd')
+        hy = obj.width / 2   # half Y-extent (from catalog 'w')
+        return (b["x_min"] <= obj.cx - hx and obj.cx + hx <= b["x_max"] and
+                b["y_min"] <= obj.cy - hy and obj.cy + hy <= b["y_max"])
 
     def find_nearest_free(self, obj: ObjectFootprint,
                           placed: List[ObjectFootprint],
@@ -93,10 +99,17 @@ class CollisionChecker:
         return best_pos
 
     def _overlaps(self, a: ObjectFootprint, b: ObjectFootprint) -> bool:
-        """Check if two footprints overlap (with clearance)."""
-        gap = max(a.min_clearance, b.min_clearance)
-        hw_a, hd_a = a.width / 2 + gap / 2, a.depth / 2 + gap / 2
-        hw_b, hd_b = b.width / 2 + gap / 2, b.depth / 2 + gap / 2
+        """Check if two footprints overlap (with clearance).
 
-        return (abs(a.cx - b.cx) < hw_a + hw_b and
-                abs(a.cy - b.cy) < hd_a + hd_b)
+        Uses AABB overlap: objects overlap iff they overlap in BOTH axes.
+        depth = X-extent (catalog 'd'), width = Y-extent (catalog 'w').
+        """
+        gap = max(a.min_clearance, b.min_clearance)
+        # half-extents per axis (depth→X, width→Y)
+        hx_a = a.depth / 2 + gap / 2
+        hy_a = a.width / 2 + gap / 2
+        hx_b = b.depth / 2 + gap / 2
+        hy_b = b.width / 2 + gap / 2
+
+        return (abs(a.cx - b.cx) < hx_a + hx_b and
+                abs(a.cy - b.cy) < hy_a + hy_b)

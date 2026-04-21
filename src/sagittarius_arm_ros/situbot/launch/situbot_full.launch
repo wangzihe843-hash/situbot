@@ -6,49 +6,71 @@
   <arg name="model" default="qwen-plus" />
   <arg name="eval_model" default="qwen-max" />
   <arg name="config_dir" default="$(find situbot)/config" />
+  <arg name="start_usb_cam" default="true" />
+  <arg name="video_dev" default="/dev/usb_cam" />
+  <arg name="camera_topic" default="/usb_cam/image_raw" />
   <arg name="coordinate_mapping_mode" default="vision_config_linear" />
   <arg name="vision_config_file" default="$(find sagittarius_object_color_detector)/config/vision_config.yaml" />
+  <arg name="detection_model" default="yolo_world" />
+  <arg name="model_weights" default="" />
+  <arg name="allow_model_download" default="false" />
+  <arg name="grounding_dino_config" default="" />
+  <arg name="grounding_dino_weights" default="" />
+  <arg name="grounding_dino_device" default="cpu" />
 
   <!-- Load shared parameters -->
   <rosparam file="$(arg config_dir)/situbot_params.yaml" command="load" ns="situbot" />
 
-  <!-- Override API key if provided -->
-  <param name="situbot/llm/api_key" value="$(arg api_key)" if="$(eval api_key != '')" />
-  <param name="situbot/evaluator_llm/api_key" value="$(arg api_key)" if="$(eval api_key != '')" />
+  <!-- Override API key if provided (must use node private namespace) -->
+  <param name="situbot_reasoning/llm/api_key" value="$(arg api_key)" if="$(eval api_key != '')" />
+  <param name="situbot_evaluator/evaluator_llm/api_key" value="$(arg api_key)" if="$(eval api_key != '')" />
+
+  <!-- Camera Driver (default: existing USB camera publishes /usb_cam/image_raw) -->
+  <include if="$(arg start_usb_cam)" file="$(find sagittarius_object_color_detector)/launch/usb_cam.launch">
+    <arg name="video_dev" value="$(arg video_dev)" />
+  </include>
 
   <!-- Perception Node -->
   <node name="situbot_perception" pkg="situbot" type="perception_node.py" output="screen">
     <rosparam subst_value="true">
-      camera_topic: /camera/color/image_raw
-      detection_model: yolo_world
+      camera_topic: $(arg camera_topic)
+      detection_model: $(arg detection_model)
       confidence_threshold: 0.3
       nms_threshold: 0.5
       min_bbox_area: 400
       max_detections_per_class: 3
+      model_weights: $(arg model_weights)
+      allow_model_download: $(arg allow_model_download)
+      grounding_dino_config: $(arg grounding_dino_config)
+      grounding_dino_weights: $(arg grounding_dino_weights)
+      grounding_dino_text_threshold: 0.25
+      grounding_dino_device: $(arg grounding_dino_device)
       debug_visualization: true
       coordinate_mapping_mode: $(arg coordinate_mapping_mode)
       vision_config_file: $(arg vision_config_file)
       workspace_bounds:
         x_min: 0.15
-        x_max: 0.45
-        y_min: -0.20
-        y_max: 0.20
+        x_max: 0.75
+        y_min: -0.40
+        y_max: 0.40
       objects_file: $(arg config_dir)/objects.yaml
     </rosparam>
   </node>
 
   <!-- Reasoning Node -->
   <node name="situbot_reasoning" pkg="situbot" type="reasoning_node.py" output="screen">
-    <param name="llm/endpoint" value="$(eval optenv('DASHSCOPE_ENDPOINT', 'https://dashscope.aliyuncs.com/compatible-mode/v1'))" />
+    <param name="llm/endpoint" value="$(optenv DASHSCOPE_ENDPOINT https://dashscope.aliyuncs.com/compatible-mode/v1)" />
     <param name="llm/model" value="$(arg model)" />
     <param name="objects_file" value="$(arg config_dir)/objects.yaml" />
     <rosparam ns="workspace" subst_value="true">
       table:
         x_min: 0.15
-        x_max: 0.45
-        y_min: -0.20
-        y_max: 0.20
-        z_surface: 0.02
+        x_max: 0.75
+        y_min: -0.40
+        y_max: 0.40
+        z_min: 0.00
+        z_max: 0.60
+        z_surface: 0.00
     </rosparam>
   </node>
 
@@ -58,10 +80,12 @@
     <rosparam ns="workspace" subst_value="true">
       table:
         x_min: 0.15
-        x_max: 0.45
-        y_min: -0.20
-        y_max: 0.20
-        z_surface: 0.02
+        x_max: 0.75
+        y_min: -0.40
+        y_max: 0.40
+        z_min: 0.00
+        z_max: 0.60
+        z_surface: 0.00
     </rosparam>
   </node>
 

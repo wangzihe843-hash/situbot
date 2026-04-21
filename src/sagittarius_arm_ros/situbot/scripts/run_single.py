@@ -33,6 +33,15 @@ def main():
     parser.add_argument("--output", type=str, help="Save result JSON to file")
     parser.add_argument("--plot", action="store_true", help="Show arrangement plot")
     parser.add_argument("--save-plot", type=str, help="Save plot to file")
+    parser.add_argument("--use-zones", action="store_true", default=True,
+                        help="Use zone-based placement (default: True)")
+    parser.add_argument("--use-legacy-coords", action="store_true",
+                        help="Use legacy exact-coordinate placement (for ablation)")
+    parser.add_argument("--rejection-samples", type=int, default=1,
+                        help="Number of rejection sampling candidates (1=disabled). "
+                             "Requires --eval-model and evaluator LLM.")
+    parser.add_argument("--eval-model", type=str, default="qwen-max",
+                        help="Evaluator model for rejection sampling")
     args = parser.parse_args()
 
     if not args.api_key:
@@ -74,9 +83,10 @@ def main():
 
     # Setup
     workspace = {
-        "x_min": 0.15, "x_max": 0.45,
-        "y_min": -0.20, "y_max": 0.20,
-        "z_surface": 0.02,
+        "x_min": 0.15, "x_max": 0.75,
+        "y_min": -0.40, "y_max": 0.40,
+        "z_min": 0.00, "z_max": 0.60,
+        "z_surface": 0.00,
     }
 
     llm = DashScopeClient(
@@ -86,6 +96,7 @@ def main():
     reasoner = SituationReasoner(
         llm_client=llm, workspace_bounds=workspace,
         object_catalog=object_catalog,
+        use_zone_placement=not args.use_legacy_coords,
     )
 
     # Run reasoning
@@ -94,14 +105,39 @@ def main():
     print(f"Objects: {', '.join(available_objects)}")
     print(f"{'='*60}\n")
 
-    result = reasoner.reason(situation, available_objects)
+    if args.rejection_samples > 1:
+        from situbot.evaluation.roundtrip import RoundtripEvaluator
+        eval_llm = DashScopeClient(
+            endpoint=args.endpoint, api_key=args.api_key,
+            model=args.eval_model, temperature=0.0,
+        )
+        # Load scenarios for evaluator
+        evaluator = RoundtripEvaluator(
+            evaluator_llm=eval_llm,
+            all_scenarios=scenarios,
+        )
+
+        def _eval_fn(arrangement):
+            placements = [
+                {"name": p.name, "x": p.x, "y": p.y, "z": p.z}
+                for p in arrangement.placements
+            ]
+            r = evaluator.evaluate(situation, placements)
+            return r.get("confidence", 0.0)
+
+        result = reasoner.reason_with_rejection_sampling(
+            situation, available_objects, _eval_fn, args.rejection_samples,
+        )
+    else:
+        result = reasoner.reason(situation, available_objects)
 
     # Print results
     print(f"\n{'='*60}")
     print(f"Layout: {result.layout_description}")
     print(f"\nPlacements ({len(result.placements)}):")
     for p in result.placements:
-        print(f"  [{p.role:11s}] {p.name:18s} → ({p.x:.3f}, {p.y:.3f})  {p.reason}")
+        zone_str = f" [{p.zone}]" if hasattr(p, 'zone') and p.zone else ""
+        print(f"  [{p.role:11s}] {p.name:18s} → ({p.x:.3f}, {p.y:.3f}){zone_str}  {p.reason}")
     print(f"{'='*60}\n")
 
     # Save output
@@ -112,7 +148,8 @@ def main():
             "layout_description": result.layout_description,
             "placements": [
                 {"name": p.name, "x": p.x, "y": p.y, "z": p.z,
-                 "role": p.role, "reason": p.reason}
+                 "role": p.role, "zone": getattr(p, 'zone', ''),
+                 "reason": p.reason}
                 for p in result.placements
             ],
             "reasoning_trace": result.reasoning_trace,

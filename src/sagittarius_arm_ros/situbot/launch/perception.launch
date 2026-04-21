@@ -1,26 +1,44 @@
 <launch>
   <!-- Perception only: camera + object detection -->
-  <arg name="camera_topic" default="/camera/color/image_raw" />
+  <arg name="start_usb_cam" default="true" />
+  <arg name="video_dev" default="/dev/usb_cam" />
+  <arg name="camera_topic" default="/usb_cam/image_raw" />
   <arg name="config_dir" default="$(find situbot)/config" />
   <arg name="coordinate_mapping_mode" default="vision_config_linear" />
   <arg name="vision_config_file" default="$(find sagittarius_object_color_detector)/config/vision_config.yaml" />
+  <arg name="detection_model" default="yolo_world" />
+  <arg name="model_weights" default="" />
+  <arg name="allow_model_download" default="false" />
+  <arg name="grounding_dino_config" default="" />
+  <arg name="grounding_dino_weights" default="" />
+  <arg name="grounding_dino_device" default="cpu" />
+
+  <include if="$(arg start_usb_cam)" file="$(find sagittarius_object_color_detector)/launch/usb_cam.launch">
+    <arg name="video_dev" value="$(arg video_dev)" />
+  </include>
 
   <node name="situbot_perception" pkg="situbot" type="perception_node.py" output="screen">
     <rosparam subst_value="true">
       camera_topic: $(arg camera_topic)
-      detection_model: yolo_world
+      detection_model: $(arg detection_model)
       confidence_threshold: 0.3
       nms_threshold: 0.5
       min_bbox_area: 400
       max_detections_per_class: 3
+      model_weights: $(arg model_weights)
+      allow_model_download: $(arg allow_model_download)
+      grounding_dino_config: $(arg grounding_dino_config)
+      grounding_dino_weights: $(arg grounding_dino_weights)
+      grounding_dino_text_threshold: 0.25
+      grounding_dino_device: $(arg grounding_dino_device)
       debug_visualization: true
       coordinate_mapping_mode: $(arg coordinate_mapping_mode)
       vision_config_file: $(arg vision_config_file)
       workspace_bounds:
         x_min: 0.15
-        x_max: 0.45
-        y_min: -0.20
-        y_max: 0.20
+        x_max: 0.75
+        y_min: -0.40
+        y_max: 0.40
       objects_file: $(arg config_dir)/objects.yaml
     </rosparam>
   </node>

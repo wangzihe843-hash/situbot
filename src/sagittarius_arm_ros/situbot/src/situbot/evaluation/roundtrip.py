@@ -4,6 +4,7 @@
 import json
 import logging
 import random
+import re
 from typing import List, Dict, Optional
 
 from situbot.reasoning.llm_client import DashScopeClient
@@ -27,7 +28,8 @@ class RoundtripEvaluator:
 
     def __init__(self, evaluator_llm: DashScopeClient,
                  all_scenarios: List[Dict],
-                 num_candidates: int = 5):
+                 num_candidates: int = 5,
+                 seed: Optional[int] = 42):
         """
         Args:
             evaluator_llm: LLM client for evaluation (should be DIFFERENT model
@@ -38,6 +40,7 @@ class RoundtripEvaluator:
         self.llm = evaluator_llm
         self.all_scenarios = all_scenarios
         self.num_candidates = num_candidates
+        self._rng = random.Random(seed)
 
     def evaluate(self, ground_truth_situation: str,
                  placements: List[Dict],
@@ -82,9 +85,15 @@ class RoundtripEvaluator:
             }
 
         predicted = result.get("predicted_situation", "")
-        # Fuzzy match: check if ground truth is contained in prediction or vice versa
-        correct = (ground_truth_situation.lower() in predicted.lower() or
-                   predicted.lower() in ground_truth_situation.lower())
+        # Exact match first, then normalised comparison
+        gt_norm = ground_truth_situation.strip().lower()
+        pred_norm = predicted.strip().lower()
+        correct = (gt_norm == pred_norm)
+        if not correct:
+            # Allow minor whitespace/punctuation differences but NOT substring
+            def _normalize(s):
+                return re.sub(r'[^a-z0-9 ]', '', s).strip()
+            correct = (_normalize(gt_norm) == _normalize(pred_norm))
 
         return {
             "correct": correct,
@@ -121,14 +130,15 @@ class RoundtripEvaluator:
             diff_level = [s for s in distractors if s not in same_level]
             # Take as many same-level as possible
             n_needed = self.num_candidates - 1
-            selected = random.sample(same_level, min(len(same_level), n_needed))
+            selected = self._rng.sample(same_level, min(len(same_level), n_needed))
             if len(selected) < n_needed:
-                selected += random.sample(diff_level, n_needed - len(selected))
+                remaining = n_needed - len(selected)
+                selected += self._rng.sample(diff_level, min(len(diff_level), remaining))
         else:
-            selected = random.sample(distractors, min(len(distractors), self.num_candidates - 1))
+            selected = self._rng.sample(distractors, min(len(distractors), self.num_candidates - 1))
 
         # Insert ground truth at random position
         candidates = selected[:]
-        insert_pos = random.randint(0, len(candidates))
+        insert_pos = self._rng.randint(0, len(candidates))
         candidates.insert(insert_pos, ground_truth)
         return candidates

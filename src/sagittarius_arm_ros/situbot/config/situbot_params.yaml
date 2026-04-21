@@ -65,12 +65,18 @@ evaluator_llm:
 
 # Perception
 perception:
-  camera_topic: "/camera/color/image_raw"
+  camera_topic: "/usb_cam/image_raw"
   detection_model: "yolo_world"  # or "grounding_dino"
   confidence_threshold: 0.3
   nms_threshold: 0.5
   min_bbox_area: 400  # reject tiny boxes that are usually noise
   max_detections_per_class: 3
+  model_weights: ""  # set to local yolov8s-worldv2.pt on RB8, or use YOLO_WORLD_WEIGHTS
+  allow_model_download: false  # keep false for offline robot runs
+  grounding_dino_config: ""  # e.g. /opt/models/GroundingDINO_SwinT_OGC.py
+  grounding_dino_weights: ""  # e.g. /opt/models/groundingdino_swint_ogc.pth
+  grounding_dino_text_threshold: 0.25
+  grounding_dino_device: "cpu"
   debug_visualization: true
   coordinate_mapping_mode: "vision_config_linear"  # or "workspace_linear"
   vision_config_file: ""  # set in launch to the calibrated sagittarius vision_config.yaml
@@ -79,10 +85,12 @@ perception:
 workspace:
   table:
     x_min: 0.15
-    x_max: 0.45
-    y_min: -0.20
-    y_max: 0.20
-    z_surface: 0.02  # table surface height relative to robot base
+    x_max: 0.75
+    y_min: -0.40
+    y_max: 0.40
+    z_min: 0.00
+    z_max: 0.60
+    z_surface: 0.00  # table surface height relative to robot base
   grid_resolution: 0.05  # for discretised placement
 
 # Gripper (values from sgr_ctrl.py MoveItSGRTool)
@@ -112,3 +120,28 @@ evaluation:
   num_candidates: 5  # number of candidate situations in roundtrip test
   save_photos: true
   results_dir: "$(find situbot)/results"
+
+# V-CAGE-inspired enhancements (arXiv:2604.09036)
+vcage_enhancements:
+  # Zone-based placement: LLM outputs qualitative zones, converted to
+  # coordinates programmatically. Set false for legacy exact-coordinate mode
+  # (useful for ablation experiments comparing zone vs coordinate).
+  use_zone_placement: true
+
+  # L-BFGS-B placement optimisation (requires scipy)
+  placement_optimizer:
+    enabled: true
+    min_clearance: 0.02      # meters between objects
+    lambda_coll: 100.0       # collision penalty weight
+    lambda_disp: 1.0         # displacement penalty weight
+    lambda_bnd: 50.0         # boundary penalty weight
+    num_restarts: 5          # random restarts for L-BFGS-B
+    max_iter: 200
+
+  # Rejection sampling: generate N arrangements, keep the best
+  # by roundtrip evaluation score. Set n_candidates=1 to disable.
+  rejection_sampling:
+    enabled: false           # enable when evaluator LLM is configured
+    n_candidates: 3          # number of candidate arrangements to generate
+    # Note: each candidate costs one Stage 3 LLM call + one evaluator call.
+    # With n_candidates=3, that's 3 extra LLM calls per arrangement.

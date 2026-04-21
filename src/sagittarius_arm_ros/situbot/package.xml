@@ -21,5 +21,8 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>moveit_commander</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>usb_cam</exec_depend>
+  <exec_depend>sagittarius_object_color_detector</exec_depend>
 </package>
