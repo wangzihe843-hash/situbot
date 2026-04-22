@@ -21,11 +21,11 @@
   <!-- Load shared parameters -->
   <rosparam file="$(arg config_dir)/situbot_params.yaml" command="load" ns="situbot" />
 
-  <!-- Override API key if provided (must use node private namespace) -->
+  <!-- Override API key if provided -->
   <param name="situbot_reasoning/llm/api_key" value="$(arg api_key)" if="$(eval api_key != '')" />
   <param name="situbot_evaluator/evaluator_llm/api_key" value="$(arg api_key)" if="$(eval api_key != '')" />
 
-  <!-- Camera Driver (default: existing USB camera publishes /usb_cam/image_raw) -->
+  <!-- Camera Driver -->
   <include if="$(arg start_usb_cam)" file="$(find sagittarius_object_color_detector)/launch/usb_cam.launch">
     <arg name="video_dev" value="$(arg video_dev)" />
   </include>
@@ -87,10 +87,15 @@
         z_max: 0.60
         z_surface: 0.00
     </rosparam>
+    <rosparam>
+      gripper:
+        lift_height: 0.08
+    </rosparam>
   </node>
 
-  <!-- Executor Node (sagittarius hardware params from sgr_ctrl.py) -->
+  <!-- Executor Node -->
   <node name="situbot_executor" pkg="situbot" type="executor_node.py" output="screen">
+    <param name="objects_file" value="$(arg config_dir)/objects.yaml" />
     <rosparam subst_value="true">
       moveit:
         planning_group: sagittarius_arm
@@ -101,6 +106,9 @@
       gripper:
         approach_height: 0.04
         lift_height: 0.08
+      workspace:
+        table:
+          z_surface: 0.00
       buffer_timeout: 2.0
     </rosparam>
   </node>

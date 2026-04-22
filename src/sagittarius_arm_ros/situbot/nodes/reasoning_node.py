@@ -24,7 +24,6 @@ class ReasoningNode:
     def __init__(self):
         rospy.init_node("situbot_reasoning", anonymous=False)
 
-        # Load LLM config (check private ns first, then shared /situbot/ ns)
         endpoint = rospy.get_param("~llm/endpoint",
                                    rospy.get_param("/situbot/llm/endpoint",
                                    "https://dashscope.aliyuncs.com/compatible-mode/v1"))
@@ -40,7 +39,6 @@ class ReasoningNode:
         if not api_key or api_key == "sk-REPLACE_WITH_YOUR_KEY":
             rospy.logwarn("No valid DashScope API key configured!")
 
-        # Load workspace bounds
         self.workspace = {
             "x_min": rospy.get_param("~workspace/table/x_min", 0.15),
             "x_max": rospy.get_param("~workspace/table/x_max", 0.75),
@@ -51,7 +49,6 @@ class ReasoningNode:
             "z_surface": rospy.get_param("~workspace/table/z_surface", 0.00),
         }
 
-        # Load object catalog
         objects_file = rospy.get_param("~objects_file", "")
         if objects_file:
             with open(objects_file) as f:
@@ -61,7 +58,6 @@ class ReasoningNode:
             self.object_catalog = []
             rospy.logwarn("No objects file configured")
 
-        # Initialize components
         llm_client = DashScopeClient(
             endpoint=endpoint, api_key=api_key, model=model,
             temperature=temperature, max_tokens=max_tokens,
@@ -75,23 +71,19 @@ class ReasoningNode:
             ),
         )
 
-        # Latest detected objects (updated by subscriber)
         self.latest_objects = []
         self.latest_detected_objects = []
         self.latest_scene_description = ""
 
-        # Subscriber for detected objects
         self.sub = rospy.Subscriber(
             "/situbot_perception/detected_objects",
             DetectedObjects, self.objects_callback, queue_size=1,
         )
 
-        # Service
         self.service = rospy.Service(
             "~get_arrangement", GetArrangement, self.handle_get_arrangement
         )
 
-        # Publisher for arrangement plan (for downstream nodes)
         self.pub = rospy.Publisher(
             "~arrangement_plan", ArrangementPlan, queue_size=1, latch=True
         )
@@ -102,7 +94,6 @@ class ReasoningNode:
         """Update latest detected objects."""
         self.latest_detected_objects = list(msg.objects)
         self.latest_scene_description = msg.scene_description
-        # Reasoning uses catalog names; keep them unique while preserving order.
         seen = set()
         self.latest_objects = []
         for obj in msg.objects:
@@ -116,7 +107,6 @@ class ReasoningNode:
         resp = GetArrangementResponse()
 
         if not self.latest_objects:
-            # If no detection yet, use all catalog objects as fallback
             rospy.logwarn("No detected objects available, using full catalog")
             object_names = [obj["name"] for obj in self.object_catalog]
         else:
@@ -125,7 +115,6 @@ class ReasoningNode:
         try:
             result = self.reasoner.reason(req.situation, object_names)
 
-            # Build ArrangementPlan message
             plan = ArrangementPlan()
             plan.header.stamp = rospy.Time.now()
             plan.situation = result.situation
@@ -144,9 +133,10 @@ class ReasoningNode:
                 placement_msg.grounded = grounding.grounded
                 placement_msg.target_pose = Pose(
                     position=Point(x=p.x, y=p.y, z=p.z),
-                    orientation=Quaternion(x=0, y=0.707, z=0, w=0.707),  # top-down
+                    orientation=Quaternion(x=0, y=0.707, z=0, w=0.707),
                 )
                 placement_msg.reason = p.reason
+                placement_msg.role = getattr(p, "role", "")
                 placement_msg.grounding_note = grounding.note
                 plan.placements.append(placement_msg)
                 if (not grounding.grounded) or ("verify calibration" in grounding.note):
@@ -154,7 +144,7 @@ class ReasoningNode:
 
             resp.plan = plan
             resp.success = True
-            self.pub.publish(plan)  # also publish for topic subscribers
+            self.pub.publish(plan)
             rospy.loginfo(f"Generated arrangement with {len(plan.placements)} placements")
 
         except Exception as e:

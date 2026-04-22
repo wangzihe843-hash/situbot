@@ -6,7 +6,7 @@ and reports aggregate metrics.
 
 Usage:
     python run_situbench.py --api-key sk-xxx
-    python run_situbench.py --api-key sk-xxx --level functional  # one level only
+    python run_situbench.py --api-key sk-xxx --level functional
     python run_situbench.py --api-key sk-xxx --output results/
 """
 
@@ -51,20 +51,19 @@ def main():
         print("ERROR: No API key. Set DASHSCOPE_API_KEY or use --api-key")
         sys.exit(1)
 
-    # Load configs
     with open(os.path.join(args.config_dir, "objects.yaml")) as f:
         object_catalog = yaml.safe_load(f)["objects"]
     with open(os.path.join(args.config_dir, "situbench.yaml")) as f:
-        scenarios = yaml.safe_load(f)["scenarios"]
+        all_scenarios = yaml.safe_load(f)["scenarios"]
 
-    # Filter by level if specified
     if args.level:
-        scenarios = [s for s in scenarios if s["level"] == args.level]
+        scenarios = [s for s in all_scenarios if s["level"] == args.level]
+    else:
+        scenarios = all_scenarios
 
     print(f"Running SituBench: {len(scenarios)} scenarios")
     print(f"Reasoning model: {args.model} | Evaluator model: {args.eval_model}")
 
-    # Setup
     workspace = {
         "x_min": 0.15, "x_max": 0.75,
         "y_min": -0.40, "y_max": 0.40,
@@ -86,15 +85,13 @@ def main():
     )
     evaluator = RoundtripEvaluator(
         evaluator_llm=eval_llm,
-        all_scenarios=scenarios,
+        all_scenarios=all_scenarios,
         num_candidates=args.num_candidates,
         seed=args.seed,
     )
 
-    # Create output directory
     os.makedirs(args.output, exist_ok=True)
 
-    # Run all scenarios
     all_results = []
     for i, scenario in enumerate(scenarios):
         sid = scenario["id"]
@@ -104,28 +101,25 @@ def main():
         print(f"\n[{i+1}/{len(scenarios)}] {sid}: {situation[:50]}...")
 
         try:
-            # Stage 1-3: Generate arrangement
             result = reasoner.reason(situation, objects)
             placements = [
                 {"name": p.name, "x": p.x, "y": p.y, "z": p.z}
                 for p in result.placements
             ]
-            print(f"  → {len(placements)} placements, layout: {result.layout_description[:60]}")
+            print(f"  -> {len(placements)} placements, layout: {result.layout_description[:60]}")
 
-            time.sleep(args.delay)  # rate limiting
+            time.sleep(args.delay)
 
-            # Stage 4: Roundtrip evaluation
             eval_result = evaluator.evaluate(situation, placements)
             eval_result["scenario_id"] = sid
             eval_result["level"] = scenario["level"]
             eval_result["layout_description"] = result.layout_description
 
-            status = "✓" if eval_result["correct"] else "✗"
-            print(f"  → Roundtrip: {status} (conf={eval_result['confidence']:.2f})")
+            status = "OK" if eval_result["correct"] else "FAIL"
+            print(f"  -> Roundtrip: {status} (conf={eval_result['confidence']:.2f})")
 
             all_results.append(eval_result)
 
-            # Save per-scenario result
             with open(os.path.join(args.output, f"{sid}.json"), "w", encoding="utf-8") as f:
                 json.dump({
                     "scenario": scenario,
@@ -135,7 +129,7 @@ def main():
                 }, f, indent=2, ensure_ascii=False)
 
         except Exception as e:
-            print(f"  → ERROR: {e}")
+            print(f"  -> ERROR: {e}")
             all_results.append({
                 "scenario_id": sid, "level": scenario["level"],
                 "correct": False, "ground_truth": situation,
@@ -144,7 +138,6 @@ def main():
 
         time.sleep(args.delay)
 
-    # Compute and print metrics
     metrics = compute_metrics(all_results)
     print(f"\n{'='*60}")
     print(f"RESULTS: {metrics['overall']['correct']}/{metrics['overall']['total']} "
@@ -153,7 +146,6 @@ def main():
         print(f"  {level:12s}: {lm['correct']}/{lm['total']} ({lm['accuracy']:.1%})")
     print(f"{'='*60}")
 
-    # Save aggregate results
     with open(os.path.join(args.output, "metrics.json"), "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
     with open(os.path.join(args.output, "all_results.json"), "w", encoding="utf-8") as f:

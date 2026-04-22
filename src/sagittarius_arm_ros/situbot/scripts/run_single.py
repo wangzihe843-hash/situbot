@@ -12,7 +12,6 @@ import os
 import sys
 import yaml
 
-# Add src to path for standalone use
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from situbot.reasoning.llm_client import DashScopeClient
@@ -33,10 +32,8 @@ def main():
     parser.add_argument("--output", type=str, help="Save result JSON to file")
     parser.add_argument("--plot", action="store_true", help="Show arrangement plot")
     parser.add_argument("--save-plot", type=str, help="Save plot to file")
-    parser.add_argument("--use-zones", action="store_true", default=True,
-                        help="Use zone-based placement (default: True)")
     parser.add_argument("--use-legacy-coords", action="store_true",
-                        help="Use legacy exact-coordinate placement (for ablation)")
+                        help="Use legacy exact-coordinate placement instead of zone-based (for ablation)")
     parser.add_argument("--rejection-samples", type=int, default=1,
                         help="Number of rejection sampling candidates (1=disabled). "
                              "Requires --eval-model and evaluator LLM.")
@@ -48,7 +45,6 @@ def main():
         print("ERROR: No API key. Set DASHSCOPE_API_KEY or use --api-key")
         sys.exit(1)
 
-    # Load configs
     config_dir = args.config_dir
     with open(os.path.join(config_dir, "objects.yaml")) as f:
         objects_data = yaml.safe_load(f)
@@ -58,7 +54,6 @@ def main():
         bench_data = yaml.safe_load(f)
     scenarios = bench_data["scenarios"]
 
-    # Resolve situation
     situation = args.situation
     scenario = None
     if args.scenario_id:
@@ -75,13 +70,11 @@ def main():
         print("ERROR: Provide --situation or --scenario-id")
         sys.exit(1)
 
-    # Determine available objects
     if scenario and "objects" in scenario:
         available_objects = scenario["objects"]
     else:
         available_objects = [obj["name"] for obj in object_catalog]
 
-    # Setup
     workspace = {
         "x_min": 0.15, "x_max": 0.75,
         "y_min": -0.40, "y_max": 0.40,
@@ -99,7 +92,6 @@ def main():
         use_zone_placement=not args.use_legacy_coords,
     )
 
-    # Run reasoning
     print(f"\n{'='*60}")
     print(f"Situation: {situation}")
     print(f"Objects: {', '.join(available_objects)}")
@@ -111,7 +103,6 @@ def main():
             endpoint=args.endpoint, api_key=args.api_key,
             model=args.eval_model, temperature=0.0,
         )
-        # Load scenarios for evaluator
         evaluator = RoundtripEvaluator(
             evaluator_llm=eval_llm,
             all_scenarios=scenarios,
@@ -131,16 +122,14 @@ def main():
     else:
         result = reasoner.reason(situation, available_objects)
 
-    # Print results
     print(f"\n{'='*60}")
     print(f"Layout: {result.layout_description}")
     print(f"\nPlacements ({len(result.placements)}):")
     for p in result.placements:
         zone_str = f" [{p.zone}]" if hasattr(p, 'zone') and p.zone else ""
-        print(f"  [{p.role:11s}] {p.name:18s} → ({p.x:.3f}, {p.y:.3f}){zone_str}  {p.reason}")
+        print(f"  [{p.role:11s}] {p.name:18s} -> ({p.x:.3f}, {p.y:.3f}){zone_str}  {p.reason}")
     print(f"{'='*60}\n")
 
-    # Save output
     if args.output:
         output_data = {
             "situation": situation,
@@ -158,7 +147,6 @@ def main():
             json.dump(output_data, f, indent=2, ensure_ascii=False)
         print(f"Saved result to {args.output}")
 
-    # Plot
     if args.plot or args.save_plot:
         catalog_dict = {obj["name"]: obj for obj in object_catalog}
         placements_for_plot = [

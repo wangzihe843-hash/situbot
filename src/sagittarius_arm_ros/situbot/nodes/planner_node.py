@@ -10,7 +10,6 @@ import yaml
 
 from geometry_msgs.msg import Pose, Point, Quaternion
 from situbot.msg import ArrangementPlan, PlannedAction, DetectedObjects
-from situbot.planning.sequence_planner import SequencePlanner
 from situbot.reasoning.situation_reasoner import Placement
 
 
@@ -20,7 +19,6 @@ class PlannerNode:
     def __init__(self):
         rospy.init_node("situbot_planner", anonymous=False)
 
-        # Load workspace bounds
         self.workspace = {
             "x_min": rospy.get_param("~workspace/table/x_min", 0.15),
             "x_max": rospy.get_param("~workspace/table/x_max", 0.75),
@@ -31,7 +29,6 @@ class PlannerNode:
             "z_surface": rospy.get_param("~workspace/table/z_surface", 0.00),
         }
 
-        # Load object catalog
         objects_file = rospy.get_param("~objects_file", "")
         catalog = {}
         if objects_file:
@@ -39,16 +36,17 @@ class PlannerNode:
                 data = yaml.safe_load(f)
             catalog = {obj["name"]: obj for obj in data.get("objects", [])}
 
+        lift_height = rospy.get_param("~gripper/lift_height", 0.08)
+
         self.planner = SequencePlanner(
             workspace_bounds=self.workspace,
             object_catalog=catalog,
+            lift_height=lift_height,
         )
 
-        # Track current object positions from perception
         self.current_positions = {}
         self.current_names = {}
 
-        # Subscribers
         self.sub_plan = rospy.Subscriber(
             "/situbot_reasoning/arrangement_plan",
             ArrangementPlan, self.plan_callback, queue_size=1,
@@ -58,7 +56,6 @@ class PlannerNode:
             DetectedObjects, self.objects_callback, queue_size=1,
         )
 
-        # Publisher: individual actions in sequence
         self.pub = rospy.Publisher(
             "~planned_actions", PlannedAction, queue_size=10,
         )
@@ -67,14 +64,12 @@ class PlannerNode:
 
     def objects_callback(self, msg: DetectedObjects):
         """Update current object positions from perception (full snapshot)."""
-        # Replace entirely — objects not in this frame are no longer visible
         self.current_positions = {}
         self.current_names = {}
         for obj in msg.objects:
             key = obj.instance_id or obj.name
             self.current_positions[key] = (obj.x, obj.y, obj.z)
             self.current_names[key] = obj.name
-            # Preserve old name-based lookup for single-instance scenes.
             if obj.name not in self.current_positions:
                 self.current_positions[obj.name] = (obj.x, obj.y, obj.z)
                 self.current_names[obj.name] = obj.name
@@ -83,7 +78,6 @@ class PlannerNode:
         """Receive an arrangement plan and compute pick-place sequence."""
         rospy.loginfo(f"Received plan for: {msg.situation[:60]}...")
 
-        # Convert ROS message to Placement objects
         target_placements = []
         for p in msg.placements:
             target_placements.append(Placement(
@@ -92,11 +86,10 @@ class PlannerNode:
                 y=p.target_pose.position.y,
                 z=p.target_pose.position.z,
                 reason=p.reason,
+                role=p.role,
             ))
             target_placements[-1].grounded_instance_id = p.grounded_instance_id
 
-        # If no perception data, spread objects across workspace to avoid
-        # stacking (which would confuse the sequence planner's collision check)
         if not self.current_positions:
             rospy.logwarn("No current positions from perception, using spread defaults")
             n = len(target_placements)
@@ -111,10 +104,8 @@ class PlannerNode:
                     self.current_positions[key] = (cx, y_pos, self.workspace["z_surface"])
                     self.current_names[key] = p.name
 
-        # Plan sequence
         actions = self.planner.plan(self.current_positions, target_placements)
 
-        # Publish each action
         for action in actions:
             action_msg = PlannedAction()
             action_msg.action_type = action.action_type

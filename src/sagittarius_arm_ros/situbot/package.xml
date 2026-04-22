@@ -31,4 +31,9 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>usb_cam</exec_depend>
   <exec_depend>sagittarius_object_color_detector</exec_depend>
+
+  <exec_depend condition="$ROS_PYTHON_VERSION == 3">python3-yaml</exec_depend>
+  <exec_depend condition="$ROS_PYTHON_VERSION == 3">python3-requests</exec_depend>
+  <exec_depend condition="$ROS_PYTHON_VERSION == 3">python3-numpy</exec_depend>
+  <exec_depend condition="$ROS_PYTHON_VERSION == 3">python3-opencv</exec_depend>
 </package>

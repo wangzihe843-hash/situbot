@@ -6,14 +6,18 @@ via MoveIt commander on the sagittarius arm.
 
 Uses sagittarius_arm and sagittarius_gripper planning groups,
 with end-effector offset and dynamic approach angles from sgr_ctrl.py.
+
+Extended: subscribes to DetectedObjects to populate the MoveIt planning
+scene with collision boxes, so the arm avoids tall objects during transit.
 """
 
 import threading
 
 import rospy
+import yaml
 from collections import defaultdict
 
-from situbot.msg import PlannedAction
+from situbot.msg import PlannedAction, DetectedObjects
 from situbot.execution.moveit_executor import MoveItExecutor
 
 
@@ -22,6 +26,9 @@ class ExecutorNode:
 
     Collects PlannedAction messages, buffers them, and executes
     in sequence_order when a complete batch is received.
+
+    Also subscribes to perception output to keep the MoveIt planning
+    scene up-to-date with obstacle boxes for all detected objects.
     """
 
     def __init__(self):
@@ -47,6 +54,23 @@ class ExecutorNode:
         )
         self.executor.initialize()
 
+        # Load object catalog for dimension lookups
+        objects_file = rospy.get_param("~objects_file", "")
+        self.object_catalog = {}
+        if objects_file:
+            try:
+                with open(objects_file) as f:
+                    data = yaml.safe_load(f)
+                self.object_catalog = {
+                    obj["name"]: obj for obj in data.get("objects", [])
+                }
+                rospy.loginfo(f"Loaded {len(self.object_catalog)} objects from catalog")
+            except Exception as e:
+                rospy.logwarn(f"Failed to load object catalog: {e}")
+
+        # Workspace z_surface for obstacle placement
+        self.z_surface = rospy.get_param("~workspace/table/z_surface", 0.00)
+
         # Action buffer (collect all actions, execute after quiet period)
         self.action_buffer = []
         self.buffer_timer = None
@@ -55,13 +79,28 @@ class ExecutorNode:
         self._max_buffer_wait = rospy.get_param("~max_buffer_wait", 5.0)
         self._executing = threading.Lock()
 
-        # Subscriber
+        # Subscribers
         self.sub = rospy.Subscriber(
             "/situbot_planner/planned_actions",
             PlannedAction, self.action_callback, queue_size=50,
         )
+        self.sub_objects = rospy.Subscriber(
+            "/situbot_perception/detected_objects",
+            DetectedObjects, self.objects_callback, queue_size=1,
+        )
 
         rospy.loginfo("ExecutorNode ready. Waiting for planned actions...")
+
+    def objects_callback(self, msg: DetectedObjects):
+        """Update MoveIt planning scene from latest perception snapshot."""
+        if not self._executing.acquire(blocking=False):
+            return
+        try:
+            self.executor.populate_scene_from_detections(
+                msg.objects, self.object_catalog, self.z_surface
+            )
+        finally:
+            self._executing.release()
 
     def action_callback(self, msg: PlannedAction):
         """Buffer incoming actions and schedule execution."""
@@ -71,16 +110,13 @@ class ExecutorNode:
         if self._first_action_time is None:
             self._first_action_time = now
 
-        # Cancel any pending timer
         if self.buffer_timer:
             self.buffer_timer.shutdown()
 
-        # If we've been buffering too long, execute immediately
         elapsed = (now - self._first_action_time).to_sec()
         if elapsed >= self._max_buffer_wait:
             self.execute_buffered()
         else:
-            # Otherwise reset the quiet-period timer
             self.buffer_timer = rospy.Timer(
                 rospy.Duration(self.buffer_timeout),
                 self.execute_buffered,
@@ -90,7 +126,7 @@ class ExecutorNode:
     def execute_buffered(self, event=None):
         """Execute all buffered actions in sequence order."""
         if not self._executing.acquire(blocking=False):
-            return  # another thread is already executing
+            return
         try:
             self._execute_buffered_inner()
         finally:
@@ -102,12 +138,10 @@ class ExecutorNode:
 
         actions = sorted(self.action_buffer, key=lambda a: a.sequence_order)
         self.action_buffer = []
-        self._first_action_time = None  # reset for next batch
+        self._first_action_time = None
 
         rospy.loginfo(f"Executing {len(actions)} actions...")
 
-        # Safety: open gripper before homing in case we're holding something
-        # from a previous failed batch
         rospy.loginfo("Safety: releasing gripper and moving to home...")
         self.executor._gripper_open()
         self.executor.go_home()
@@ -118,12 +152,24 @@ class ExecutorNode:
         for action in actions:
             pos = action.pose.position
             name = action.object_name
+            obj_id = action.instance_id or name
             label = f"{name} ({action.instance_id})" if action.instance_id else name
 
             if action.action_type == "pick":
+                self.executor.remove_scene_obstacle(obj_id)
+                rospy.sleep(0.1)
                 success = self.executor.pick(pos.x, pos.y, pos.z, label)
             elif action.action_type == "place":
                 success = self.executor.place(pos.x, pos.y, pos.z, label)
+                if success:
+                    cat = self.object_catalog.get(name, {})
+                    dims = cat.get("dimensions", {})
+                    w = dims.get("w", 0.10)
+                    d = dims.get("d", 0.10)
+                    h = dims.get("h", 0.05)
+                    self.executor.add_scene_obstacle(
+                        obj_id, pos.x, pos.y, self.z_surface, w, d, h
+                    )
             else:
                 rospy.logwarn(f"Unknown action type: {action.action_type}")
                 continue
@@ -136,9 +182,7 @@ class ExecutorNode:
                               "returning to home and continuing")
                 self.executor.go_home()
 
-        # Return home after all actions
         self.executor.go_home()
-
         rospy.loginfo(f"Execution complete: {success_count} succeeded, {fail_count} failed")
 
 
