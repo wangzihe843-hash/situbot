@@ -10,24 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 class DashScopeClient:
-    """Client for DashScope API (OpenAI-compatible endpoint).
-
-    Supports Qwen-Plus, Qwen-Max, and other models available via DashScope.
-    """
+    """Client for DashScope API (OpenAI-compatible endpoint)."""
 
     def __init__(self, endpoint: str, api_key: str, model: str = "qwen-plus",
                  temperature: float = 0.3, max_tokens: int = 2048,
                  timeout: int = 30, max_retries: int = 3):
-        """
-        Args:
-            endpoint: API base URL (e.g., https://dashscope.aliyuncs.com/compatible-mode/v1).
-            api_key: DashScope API key.
-            model: Model name.
-            temperature: Sampling temperature.
-            max_tokens: Maximum response tokens.
-            timeout: Request timeout in seconds.
-            max_retries: Number of retries on transient failures.
-        """
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
         self.model = model
@@ -38,7 +25,6 @@ class DashScopeClient:
         self._session = None
 
     def _get_session(self):
-        """Lazy-init requests session."""
         if self._session is None:
             import requests
             self._session = requests.Session()
@@ -52,20 +38,6 @@ class DashScopeClient:
              temperature: Optional[float] = None,
              max_tokens: Optional[int] = None,
              response_format: Optional[Dict] = None) -> str:
-        """Send a chat completion request.
-
-        Args:
-            messages: List of {"role": "system"|"user"|"assistant", "content": "..."}.
-            temperature: Override default temperature.
-            max_tokens: Override default max_tokens.
-            response_format: Optional format spec (e.g., {"type": "json_object"}).
-
-        Returns:
-            The assistant's response text.
-
-        Raises:
-            RuntimeError: If all retries fail.
-        """
         payload = {
             "model": self.model,
             "messages": messages,
@@ -83,7 +55,6 @@ class DashScopeClient:
             try:
                 resp = session.post(url, json=payload, timeout=self.timeout)
                 if resp.status_code == 429:
-                    # Rate limited — back off
                     wait = min(2 ** attempt * 2, 30)
                     logger.warning(f"Rate limited, waiting {wait}s (attempt {attempt+1})")
                     time.sleep(wait)
@@ -102,31 +73,49 @@ class DashScopeClient:
 
     def chat_json(self, messages: List[Dict[str, str]],
                    _json_retries: int = 2, **kwargs) -> Dict[str, Any]:
-        """Chat and parse response as JSON.
-
-        Automatically adds response_format for JSON mode and retries
-        on parse failures.
-        """
         kwargs.setdefault("response_format", {"type": "json_object"})
 
         last_error = None
         for attempt in range(_json_retries):
             response = self.chat(messages, **kwargs)
 
-            # Extract JSON from response, handling markdown fences and surrounding text
             text = response.strip()
 
-            # Try extracting from ```json ... ``` or ``` ... ``` fences first
             import re
             fence_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', text, re.DOTALL)
             if fence_match:
                 text = fence_match.group(1).strip()
             else:
-                # Try to find the outermost JSON object or array
+                start_ch = None
                 for i, ch in enumerate(text):
                     if ch in ('{', '['):
+                        start_ch = ch
                         text = text[i:]
                         break
+                if start_ch:
+                    close_ch = '}' if start_ch == '{' else ']'
+                    depth = 0
+                    in_string = False
+                    escape = False
+                    for j, c in enumerate(text):
+                        if escape:
+                            escape = False
+                            continue
+                        if c == '\\' and in_string:
+                            escape = True
+                            continue
+                        if c == '"' and not escape:
+                            in_string = not in_string
+                            continue
+                        if in_string:
+                            continue
+                        if c == start_ch:
+                            depth += 1
+                        elif c == close_ch:
+                            depth -= 1
+                            if depth == 0:
+                                text = text[:j + 1]
+                                break
 
             try:
                 return json.loads(text)

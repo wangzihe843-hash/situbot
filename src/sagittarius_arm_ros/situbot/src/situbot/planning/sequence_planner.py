@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Pick-and-place sequence planner with collision avoidance."""
+"""Pick-and-place sequence planner with collision avoidance.
+
+Extended with height-aware transit collision checks.
+"""
 
 import logging
 from dataclasses import dataclass
@@ -12,60 +15,35 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PickPlaceAction:
-    """A single pick-and-place action."""
     sequence_order: int
-    action_type: str  # "pick" or "place"
+    action_type: str
     object_name: str
     instance_id: str
     x: float
     y: float
     z: float
     reason: str = ""
-    zone: str = ""  # qualitative zone (v2, for logging/debugging)
+    zone: str = ""
 
 
 class SequencePlanner:
-    """Plans collision-free pick-and-place sequences.
-
-    Strategy:
-    1. Sort objects by priority (prominent first, remove last)
-    2. For each object, pick from current position, place at target
-    3. Resolve collisions by nudging target positions
-    4. Generate alternating pick/place action sequence
-
-    Objects are moved one at a time: pick → place → pick → place → ...
-    The planner uses a greedy nearest-first approach within each priority tier.
-    """
+    """Plans collision-free pick-and-place sequences."""
 
     ROLE_PRIORITY = {"prominent": 0, "accessible": 1, "peripheral": 2, "remove": 3}
 
     def __init__(self, workspace_bounds: dict, object_catalog: dict,
-                 min_clearance: float = 0.02):
-        """
-        Args:
-            workspace_bounds: Dict with x_min, x_max, y_min, y_max, z_surface.
-            object_catalog: Dict of object_name → object info (with dimensions).
-            min_clearance: Minimum gap between placed objects.
-        """
+                 min_clearance: float = 0.02,
+                 lift_height: float = 0.08):
         self.bounds = workspace_bounds
         self.catalog = object_catalog
+        self.lift_height = lift_height
         self.collision_checker = CollisionChecker(workspace_bounds, min_clearance)
 
     def plan(self, current_positions: Dict[str, Tuple[float, float, float]],
              target_placements: list) -> List[PickPlaceAction]:
-        """Plan a sequence of pick-and-place actions.
-
-        Args:
-            current_positions: Dict of object_name → (x, y, z) current positions.
-            target_placements: List of Placement objects (from SituationReasoner).
-
-        Returns:
-            Ordered list of PickPlaceAction.
-        """
         def placement_key(placement):
             return getattr(placement, "grounded_instance_id", "") or placement.name
 
-        # Filter to graspable objects only
         graspable_targets = []
         for p in target_placements:
             obj_info = self.catalog.get(p.name, {})
@@ -78,35 +56,35 @@ class SequencePlanner:
                 continue
             graspable_targets.append(p)
 
-        # Sort by role priority, then by distance from current to target (nearest first)
-        def sort_key(p):
-            priority = self.ROLE_PRIORITY.get(getattr(p, "role", ""), 2)
-            cur = current_positions.get(placement_key(p), current_positions.get(p.name, (0, 0, 0)))
-            dist = ((cur[0] - p.x) ** 2 + (cur[1] - p.y) ** 2) ** 0.5
-            return (priority, dist)
+        all_current_footprints = self._build_current_footprints(
+            graspable_targets, current_positions, placement_key
+        )
 
-        sorted_targets = sorted(graspable_targets, key=sort_key)
+        sorted_targets = self._sort_with_height_priority(
+            graspable_targets, current_positions, placement_key,
+            all_current_footprints
+        )
 
-        # Generate pick-place sequence with collision resolution
         actions = []
         placed_footprints = []
+        removed_names = set()
         seq = 0
 
         for placement in sorted_targets:
             obj_info = self.catalog.get(placement.name, {})
-            dims = obj_info.get("dimensions", {"w": 0.10, "d": 0.10})
+            dims = obj_info.get("dimensions", {"w": 0.10, "d": 0.10, "h": 0.05})
+            obj_h = dims.get("h", 0.05)
 
-            # Check collision at target position
             footprint = ObjectFootprint(
                 name=placement.name,
                 cx=placement.x,
                 cy=placement.y,
                 width=dims.get("w", 0.10),
                 depth=dims.get("d", 0.10),
+                height=obj_h,
             )
 
             if self.collision_checker.check_collision(footprint, placed_footprints):
-                # Try to find nearest free position
                 free_pos = self.collision_checker.find_nearest_free(
                     footprint, placed_footprints
                 )
@@ -121,7 +99,30 @@ class SequencePlanner:
             key = placement_key(placement)
             cur = current_positions.get(key, current_positions[placement.name])
 
-            # Pick action
+            remaining_obstacles = [
+                fp for fp in all_current_footprints
+                if fp.name != placement.name and fp.name not in removed_names
+            ]
+            transit_obstacles = remaining_obstacles + placed_footprints
+
+            transit_collisions = self.collision_checker.check_transit_collision(
+                from_xy=(cur[0], cur[1]),
+                to_xy=(footprint.cx, footprint.cy),
+                transit_height=self.lift_height,
+                carried_width=dims.get("w", 0.10),
+                obstacles=transit_obstacles,
+            )
+            if transit_collisions:
+                safe_h = self.collision_checker.compute_safe_transit_height(
+                    transit_obstacles
+                )
+                logger.warning(
+                    f"Transit collision for {placement.name}: arm at "
+                    f"{self.lift_height:.3f}m may hit [{', '.join(transit_collisions)}]. "
+                    f"MoveIt planning scene should handle avoidance. "
+                    f"Safe transit height: {safe_h:.3f}m"
+                )
+
             actions.append(PickPlaceAction(
                 sequence_order=seq,
                 action_type="pick",
@@ -131,8 +132,8 @@ class SequencePlanner:
                 reason=f"Pick {placement.name} from current position",
             ))
             seq += 1
+            removed_names.add(placement.name)
 
-            # Place action
             actions.append(PickPlaceAction(
                 sequence_order=seq,
                 action_type="place",
@@ -140,7 +141,7 @@ class SequencePlanner:
                 instance_id=key,
                 x=footprint.cx, y=footprint.cy,
                 z=self.bounds["z_surface"],
-                reason=placement.reason,
+                reason=getattr(placement, "reason", ""),
             ))
             seq += 1
 
@@ -148,3 +149,59 @@ class SequencePlanner:
 
         logger.info(f"Planned {len(actions)} actions for {len(sorted_targets)} objects")
         return actions
+
+    def _build_current_footprints(
+        self,
+        targets: list,
+        current_positions: dict,
+        key_fn,
+    ) -> List[ObjectFootprint]:
+        footprints = []
+        for p in targets:
+            key = key_fn(p)
+            cur = current_positions.get(key, current_positions.get(p.name))
+            if cur is None:
+                continue
+            obj_info = self.catalog.get(p.name, {})
+            dims = obj_info.get("dimensions", {"w": 0.10, "d": 0.10, "h": 0.05})
+            footprints.append(ObjectFootprint(
+                name=p.name,
+                cx=cur[0],
+                cy=cur[1],
+                width=dims.get("w", 0.10),
+                depth=dims.get("d", 0.10),
+                height=dims.get("h", 0.05),
+            ))
+        return footprints
+
+    def _sort_with_height_priority(
+        self,
+        targets: list,
+        current_positions: dict,
+        key_fn,
+        current_footprints: List[ObjectFootprint],
+    ) -> list:
+        blocker_counts: Dict[str, int] = {}
+        for p in targets:
+            key = key_fn(p)
+            cur = current_positions.get(key, current_positions.get(p.name, (0, 0, 0)))
+            others = [fp for fp in current_footprints if fp.name != p.name]
+            hits = self.collision_checker.check_transit_collision(
+                from_xy=(cur[0], cur[1]),
+                to_xy=(p.x, p.y),
+                transit_height=self.lift_height,
+                carried_width=0.10,
+                obstacles=others,
+            )
+            for hit_name in hits:
+                blocker_counts[hit_name] = blocker_counts.get(hit_name, 0) + 1
+
+        def sort_key(p):
+            priority = self.ROLE_PRIORITY.get(getattr(p, "role", ""), 2)
+            blocker_bonus = -blocker_counts.get(p.name, 0)
+            key = key_fn(p)
+            cur = current_positions.get(key, current_positions.get(p.name, (0, 0, 0)))
+            dist = ((cur[0] - p.x) ** 2 + (cur[1] - p.y) ** 2) ** 0.5
+            return (priority, blocker_bonus, dist)
+
+        return sorted(targets, key=sort_key)
