@@ -11,6 +11,7 @@ import yaml
 from geometry_msgs.msg import Pose, Point, Quaternion
 from situbot.msg import ArrangementPlan, PlannedAction, DetectedObjects
 from situbot.reasoning.situation_reasoner import Placement
+from situbot.planning.sequence_planner import SequencePlanner
 
 
 class PlannerNode:
