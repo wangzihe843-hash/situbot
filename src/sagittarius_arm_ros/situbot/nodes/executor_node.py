@@ -15,7 +15,6 @@ import threading
 
 import rospy
 import yaml
-from collections import defaultdict
 
 from situbot.msg import PlannedAction, DetectedObjects
 from situbot.execution.moveit_executor import MoveItExecutor
@@ -78,6 +77,7 @@ class ExecutorNode:
         self._first_action_time = None
         self._max_buffer_wait = rospy.get_param("~max_buffer_wait", 5.0)
         self._executing = threading.Lock()
+        self._buffer_lock = threading.Lock()
 
         # Subscribers
         self.sub = rospy.Subscriber(
@@ -104,24 +104,28 @@ class ExecutorNode:
 
     def action_callback(self, msg: PlannedAction):
         """Buffer incoming actions and schedule execution."""
-        self.action_buffer.append(msg)
-        now = rospy.Time.now()
+        should_execute_now = False
+        with self._buffer_lock:
+            self.action_buffer.append(msg)
+            now = rospy.Time.now()
 
-        if self._first_action_time is None:
-            self._first_action_time = now
+            if self._first_action_time is None:
+                self._first_action_time = now
 
-        if self.buffer_timer:
-            self.buffer_timer.shutdown()
+            if self.buffer_timer:
+                self.buffer_timer.shutdown()
 
-        elapsed = (now - self._first_action_time).to_sec()
-        if elapsed >= self._max_buffer_wait:
+            elapsed = (now - self._first_action_time).to_sec()
+            if elapsed >= self._max_buffer_wait:
+                should_execute_now = True
+            else:
+                self.buffer_timer = rospy.Timer(
+                    rospy.Duration(self.buffer_timeout),
+                    self.execute_buffered,
+                    oneshot=True,
+                )
+        if should_execute_now:
             self.execute_buffered()
-        else:
-            self.buffer_timer = rospy.Timer(
-                rospy.Duration(self.buffer_timeout),
-                self.execute_buffered,
-                oneshot=True,
-            )
 
     def execute_buffered(self, event=None):
         """Execute all buffered actions in sequence order."""
@@ -133,12 +137,12 @@ class ExecutorNode:
             self._executing.release()
 
     def _execute_buffered_inner(self):
-        if not self.action_buffer:
-            return
-
-        actions = sorted(self.action_buffer, key=lambda a: a.sequence_order)
-        self.action_buffer = []
-        self._first_action_time = None
+        with self._buffer_lock:
+            if not self.action_buffer:
+                return
+            actions = sorted(self.action_buffer, key=lambda a: a.sequence_order)
+            self.action_buffer = []
+            self._first_action_time = None
 
         rospy.loginfo(f"Executing {len(actions)} actions...")
 

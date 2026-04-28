@@ -74,9 +74,10 @@ class SequencePlanner:
             obj_info = self.catalog.get(placement.name, {})
             dims = obj_info.get("dimensions", {"w": 0.10, "d": 0.10, "h": 0.05})
             obj_h = dims.get("h", 0.05)
+            key = placement_key(placement)
 
             footprint = ObjectFootprint(
-                name=placement.name,
+                name=key,
                 cx=placement.x,
                 cy=placement.y,
                 width=dims.get("w", 0.10),
@@ -96,12 +97,16 @@ class SequencePlanner:
                     logger.warning(f"Could not find collision-free position for {placement.name}")
                     continue
 
-            key = placement_key(placement)
-            cur = current_positions.get(key, current_positions[placement.name])
+            cur = current_positions.get(key)
+            if cur is None:
+                cur = current_positions.get(placement.name)
+            if cur is None:
+                logger.warning(f"Object {placement.name} ({key}) missing current position at plan time, skipping")
+                continue
 
             remaining_obstacles = [
                 fp for fp in all_current_footprints
-                if fp.name != placement.name and fp.name not in removed_names
+                if fp.name != key and fp.name not in removed_names
             ]
             transit_obstacles = remaining_obstacles + placed_footprints
 
@@ -132,7 +137,7 @@ class SequencePlanner:
                 reason=f"Pick {placement.name} from current position",
             ))
             seq += 1
-            removed_names.add(placement.name)
+            removed_names.add(key)
 
             actions.append(PickPlaceAction(
                 sequence_order=seq,
@@ -165,7 +170,7 @@ class SequencePlanner:
             obj_info = self.catalog.get(p.name, {})
             dims = obj_info.get("dimensions", {"w": 0.10, "d": 0.10, "h": 0.05})
             footprints.append(ObjectFootprint(
-                name=p.name,
+                name=key,
                 cx=cur[0],
                 cy=cur[1],
                 width=dims.get("w", 0.10),
@@ -185,7 +190,7 @@ class SequencePlanner:
         for p in targets:
             key = key_fn(p)
             cur = current_positions.get(key, current_positions.get(p.name, (0, 0, 0)))
-            others = [fp for fp in current_footprints if fp.name != p.name]
+            others = [fp for fp in current_footprints if fp.name != key]
             hits = self.collision_checker.check_transit_collision(
                 from_xy=(cur[0], cur[1]),
                 to_xy=(p.x, p.y),
@@ -198,8 +203,8 @@ class SequencePlanner:
 
         def sort_key(p):
             priority = self.ROLE_PRIORITY.get(getattr(p, "role", ""), 2)
-            blocker_bonus = -blocker_counts.get(p.name, 0)
             key = key_fn(p)
+            blocker_bonus = -blocker_counts.get(key, 0)
             cur = current_positions.get(key, current_positions.get(p.name, (0, 0, 0)))
             dist = ((cur[0] - p.x) ** 2 + (cur[1] - p.y) ** 2) ** 0.5
             return (priority, blocker_bonus, dist)
