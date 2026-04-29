@@ -1,0 +1,55 @@
+[{
+    "scenario_id": "DATE01",
+    "situation": "romantic dinner date for a couple",
+    "object_arrangements": [
+        {
+            "name": "wine_glass",
+            "role": "prominent",
+            "coordinate": {"x": 0.45, "y": 0.25, "z": 0.1},
+            "reasoning": "作为浪漫晚餐的核心饮品容器，放置在prominent区域中央偏右前方，便于双方取用且视觉突出。"
+        },
+        {
+            "name": "toy_car",
+            "role": "peripheral",
+            "coordinate": {"x": 0.65, "y": 0.3, "z": 0.1},
+            "reasoning": "与晚餐主题无关的玩具，放置在peripheral区域的右侧边缘，避免干扰主要用餐氛围。"
+        },
+        {
+            "name": "dinner_plate",
+            "role": "prominent",
+            "coordinate": {"x": 0.45, "y": -0.25, "z": 0.1},
+            "reasoning": "晚餐的核心餐具，放置在prominent区域中央偏左前方，与酒杯对称，构成主要用餐区域。"
+        },
+        {
+            "name": "math_textbook",
+            "role": "peripheral",
+            "coordinate": {"x": 0.2, "y": 0.3, "z": 0.1},
+            "reasoning": "与浪漫晚餐无关的学习物品，放置在peripheral区域的左侧边缘，远离核心用餐区。"
+        },
+        {
+            "name": "candle",
+            "role": "prominent",
+            "coordinate": {"x": 0.55, "y": 0.35, "z": 0.1},
+            "reasoning": "营造浪漫氛围的关键物品，放置在prominent区域的右前方，与酒杯相邻但保持安全距离，光线能覆盖用餐区。"
+        },
+        {
+            "name": "flower_vase",
+            "role": "accessible",
+            "coordinate": {"x": 0.35, "y": 0.2, "z": 0.1},
+            "reasoning": "装饰性物品，增强浪漫氛围，放置在accessible区域靠近中央的位置，作为视觉焦点但不过于突出。"
+        },
+        {
+            "name": "game_controller",
+            "role": "peripheral",
+            "coordinate": {"x": 0.7, "y": -0.35, "z": 0.1},
+            "reasoning": "与晚餐无关的娱乐物品，放置在peripheral区域的右下角，远离用餐区，避免干扰。"
+        },
+        {
+            "name": "tissue_box",
+            "role": "accessible",
+            "coordinate": {"x": 0.3, "y": -0.2, "z": 0.1},
+            "reasoning": "实用辅助物品，放置在accessible区域的左前方，靠近餐盘便于取用，但不占据核心位置。"
+        }
+    ],
+    "layout_summary": "布局以浪漫晚餐为核心，将酒杯、餐盘和蜡烛作为prominent物品放置在中央两侧及前方，构成主要用餐与氛围区；花瓶和纸巾盒作为accessible辅助物品置于两侧近处；玩具车、数学书和游戏手柄等无关物品移至peripheral区域边缘。所有物品均避让y∈[-0.1,0.1]的禁行区，并确保间距≥0.1米，实现了功能分区与视觉平衡。"
+}]
