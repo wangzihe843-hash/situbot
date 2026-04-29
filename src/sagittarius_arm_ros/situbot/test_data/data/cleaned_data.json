@@ -1,0 +1,83 @@
+[
+    {
+        "scenario_id": "DATE01",
+        "situation": "romantic dinner date for a couple",
+        "level": "emotional",
+        "candidate_objects": [
+            "wine_glass",
+            "toy_car",
+            "dinner_plate",
+            "math_textbook",
+            "candle",
+            "flower_vase",
+            "game_controller",
+            "tissue_box"
+        ],
+        "object_coordinates": [
+            {
+                "name": "wine_glass",
+                "coordinate": {
+                    "x": 0.15,
+                    "y": 0.55,
+                    "z": 0.0
+                }
+            },
+            {
+                "name": "toy_car",
+                "coordinate": {
+                    "x": 0.4,
+                    "y": 0.2,
+                    "z": 0.0
+                }
+            },
+            {
+                "name": "dinner_plate",
+                "coordinate": {
+                    "x": 0.0,
+                    "y": 0.5,
+                    "z": 0.0
+                }
+            },
+            {
+                "name": "math_textbook",
+                "coordinate": {
+                    "x": -0.4,
+                    "y": 0.3,
+                    "z": 0.0
+                }
+            },
+            {
+                "name": "candle",
+                "coordinate": {
+                    "x": -0.1,
+                    "y": 0.6,
+                    "z": 0.0
+                }
+            },
+            {
+                "name": "flower_vase",
+                "coordinate": {
+                    "x": 0.0,
+                    "y": 0.8,
+                    "z": 0.0
+                }
+            },
+            {
+                "name": "game_controller",
+                "coordinate": {
+                    "x": 0.35,
+                    "y": 0.85,
+                    "z": 0.0
+                }
+            },
+            {
+                "name": "tissue_box",
+                "coordinate": {
+                    "x": 0.25,
+                    "y": 0.3,
+                    "z": 0.0
+                }
+            }
+        ]
+    }
+]
