@@ -183,7 +183,6 @@ class ObjectDetector:
             "yolov8s-worldv2.pt",
             os.path.join(os.getcwd(), "yolov8s-worldv2.pt"),
             os.path.join(os.getcwd(), "models", "yolov8s-worldv2.pt"),
-            os.path.join(os.getcwd(), "config", "models", "yolov8s-worldv2.pt"),
         ]
         for candidate in local_candidates:
             expanded = os.path.abspath(os.path.expanduser(os.path.expandvars(candidate)))
