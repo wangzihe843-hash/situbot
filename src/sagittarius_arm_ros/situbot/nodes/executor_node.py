@@ -33,14 +33,37 @@ class ExecutorNode:
     def __init__(self):
         rospy.init_node("situbot_executor", anonymous=False)
 
+        def _get_param_with_global_fallback(private_key, global_key, default):
+            if rospy.has_param(private_key):
+                return rospy.get_param(private_key)
+            if rospy.has_param(global_key):
+                return rospy.get_param(global_key)
+            return default
+
         # Load params (matched to sagittarius hardware)
-        planning_group = rospy.get_param("~moveit/planning_group", "sagittarius_arm")
-        gripper_group = rospy.get_param("~moveit/gripper_group", "sagittarius_gripper")
-        planning_time = rospy.get_param("~moveit/planning_time", 5.0)
-        max_vel = rospy.get_param("~moveit/max_velocity_scaling", 0.5)
-        max_acc = rospy.get_param("~moveit/max_acceleration_scaling", 0.5)
+        planning_group = _get_param_with_global_fallback(
+            "~moveit/planning_group", "moveit/planning_group", "sagittarius_arm"
+        )
+        gripper_group = _get_param_with_global_fallback(
+            "~moveit/gripper_group", "moveit/gripper_group", "sagittarius_gripper"
+        )
+        planning_time = _get_param_with_global_fallback(
+            "~moveit/planning_time", "moveit/planning_time", 5.0
+        )
+        max_vel = _get_param_with_global_fallback(
+            "~moveit/max_velocity_scaling", "moveit/max_velocity_scaling", 0.5
+        )
+        max_acc = _get_param_with_global_fallback(
+            "~moveit/max_acceleration_scaling", "moveit/max_acceleration_scaling", 0.5
+        )
         approach_h = rospy.get_param("~gripper/approach_height", 0.04)
         lift_h = rospy.get_param("~gripper/lift_height", 0.08)
+        self.start_pose = _get_param_with_global_fallback(
+            "~moveit/start_pose", "moveit/start_pose", "home"
+        )
+        self.recovery_pose = _get_param_with_global_fallback(
+            "~moveit/recovery_pose", "moveit/recovery_pose", self.start_pose
+        )
 
         self.executor = MoveItExecutor(
             planning_group=planning_group,
@@ -52,6 +75,9 @@ class ExecutorNode:
             lift_height=lift_h,
         )
         self.executor.initialize()
+        rospy.loginfo(
+            f"Executor poses: start_pose='{self.start_pose}', recovery_pose='{self.recovery_pose}'"
+        )
 
         # Load object catalog for dimension lookups
         objects_file = rospy.get_param("~objects_file", "")
@@ -146,9 +172,9 @@ class ExecutorNode:
 
         rospy.loginfo(f"Executing {len(actions)} actions...")
 
-        rospy.loginfo("Safety: releasing gripper and moving to home...")
+        rospy.loginfo(f"Safety: releasing gripper and moving to start pose '{self.start_pose}'...")
         self.executor._gripper_open()
-        self.executor.go_home()
+        self.executor.go_named_pose(self.start_pose)
 
         success_count = 0
         fail_count = 0
@@ -183,10 +209,10 @@ class ExecutorNode:
             else:
                 fail_count += 1
                 rospy.logwarn(f"Action failed: {action.action_type} {label}, "
-                              "returning to home and continuing")
-                self.executor.go_home()
+                              f"returning to '{self.recovery_pose}' and continuing")
+                self.executor.go_named_pose(self.recovery_pose)
 
-        self.executor.go_home()
+        self.executor.go_named_pose(self.recovery_pose)
         rospy.loginfo(f"Execution complete: {success_count} succeeded, {fail_count} failed")
 
 
