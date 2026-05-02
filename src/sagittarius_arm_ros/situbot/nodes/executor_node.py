@@ -41,6 +41,8 @@ class ExecutorNode:
         max_acc = rospy.get_param("~moveit/max_acceleration_scaling", 0.5)
         approach_h = rospy.get_param("~gripper/approach_height", 0.04)
         lift_h = rospy.get_param("~gripper/lift_height", 0.08)
+        self.start_pose = rospy.get_param("~moveit/start_pose", "home")
+        self.recovery_pose = rospy.get_param("~moveit/recovery_pose", self.start_pose)
 
         self.executor = MoveItExecutor(
             planning_group=planning_group,
@@ -146,9 +148,9 @@ class ExecutorNode:
 
         rospy.loginfo(f"Executing {len(actions)} actions...")
 
-        rospy.loginfo("Safety: releasing gripper and moving to home...")
+        rospy.loginfo(f"Safety: releasing gripper and moving to start pose '{self.start_pose}'...")
         self.executor._gripper_open()
-        self.executor.go_home()
+        self.executor.go_named_pose(self.start_pose)
 
         success_count = 0
         fail_count = 0
@@ -183,10 +185,10 @@ class ExecutorNode:
             else:
                 fail_count += 1
                 rospy.logwarn(f"Action failed: {action.action_type} {label}, "
-                              "returning to home and continuing")
-                self.executor.go_home()
+                              f"returning to '{self.recovery_pose}' and continuing")
+                self.executor.go_named_pose(self.recovery_pose)
 
-        self.executor.go_home()
+        self.executor.go_named_pose(self.recovery_pose)
         rospy.loginfo(f"Execution complete: {success_count} succeeded, {fail_count} failed")
 
 

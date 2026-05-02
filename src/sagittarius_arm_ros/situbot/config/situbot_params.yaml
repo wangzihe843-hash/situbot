@@ -111,6 +111,11 @@ moveit:
   goal_orientation_tolerance: 0.001  # from sgr_ctrl.py
   max_velocity_scaling: 0.5  # from sgr_ctrl.py
   max_acceleration_scaling: 0.5  # from sgr_ctrl.py
+  # Named targets are defined in SRDF (e.g. home/sleep/observe if added).
+  # start_pose: pose used before executing a batch of actions.
+  # recovery_pose: pose used after failures and at end of batch.
+  start_pose: "observe"
+  recovery_pose: "observe"
 
 # Home position: uses SRDF named target 'home' (no joint values needed)
 # Sleep position also available: SRDF named target 'sleep'
