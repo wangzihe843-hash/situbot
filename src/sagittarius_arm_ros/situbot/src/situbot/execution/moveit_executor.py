@@ -188,13 +188,18 @@ class MoveItExecutor:
         logger.info("Planning scene cleared")
 
     def go_home(self) -> bool:
+        success = self.go_named_pose("home")
+        logger.info(f"go_home: {'success' if success else 'failed'}")
+        return success
+
+    def go_named_pose(self, pose_name: str) -> bool:
         import rospy
-        self.arm_group.set_named_target('home')
+        self.arm_group.set_named_target(pose_name)
         success = self.arm_group.go(wait=True)
         self.arm_group.stop()
         self.arm_group.clear_pose_targets()
         rospy.sleep(1)
-        logger.info(f"go_home: {'success' if success else 'failed'}")
+        logger.info(f"go_named_pose('{pose_name}'): {'success' if success else 'failed'}")
         return success
 
     def go_sleep(self) -> bool:
