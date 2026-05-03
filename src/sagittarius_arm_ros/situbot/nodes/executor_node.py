@@ -33,12 +33,29 @@ class ExecutorNode:
     def __init__(self):
         rospy.init_node("situbot_executor", anonymous=False)
 
+        def _get_param_with_global_fallback(private_key, global_key, default):
+            if rospy.has_param(private_key):
+                return rospy.get_param(private_key)
+            if rospy.has_param(global_key):
+                return rospy.get_param(global_key)
+            return default
+
         # Load params (matched to sagittarius hardware)
-        planning_group = rospy.get_param("~moveit/planning_group", "sagittarius_arm")
-        gripper_group = rospy.get_param("~moveit/gripper_group", "sagittarius_gripper")
-        planning_time = rospy.get_param("~moveit/planning_time", 5.0)
-        max_vel = rospy.get_param("~moveit/max_velocity_scaling", 0.5)
-        max_acc = rospy.get_param("~moveit/max_acceleration_scaling", 0.5)
+        planning_group = _get_param_with_global_fallback(
+            "~moveit/planning_group", "moveit/planning_group", "sagittarius_arm"
+        )
+        gripper_group = _get_param_with_global_fallback(
+            "~moveit/gripper_group", "moveit/gripper_group", "sagittarius_gripper"
+        )
+        planning_time = _get_param_with_global_fallback(
+            "~moveit/planning_time", "moveit/planning_time", 5.0
+        )
+        max_vel = _get_param_with_global_fallback(
+            "~moveit/max_velocity_scaling", "moveit/max_velocity_scaling", 0.5
+        )
+        max_acc = _get_param_with_global_fallback(
+            "~moveit/max_acceleration_scaling", "moveit/max_acceleration_scaling", 0.5
+        )
         approach_h = rospy.get_param("~gripper/approach_height", 0.04)
         lift_h = rospy.get_param("~gripper/lift_height", 0.08)
         self.start_pose = rospy.get_param("~moveit/start_pose", "home")
@@ -54,6 +71,9 @@ class ExecutorNode:
             lift_height=lift_h,
         )
         self.executor.initialize()
+        rospy.loginfo(
+            f"Executor poses: start_pose='{self.start_pose}', recovery_pose='{self.recovery_pose}'"
+        )
 
         # Load object catalog for dimension lookups
         objects_file = rospy.get_param("~objects_file", "")
