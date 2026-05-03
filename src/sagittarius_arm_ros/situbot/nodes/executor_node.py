@@ -58,12 +58,8 @@ class ExecutorNode:
         )
         approach_h = rospy.get_param("~gripper/approach_height", 0.04)
         lift_h = rospy.get_param("~gripper/lift_height", 0.08)
-        self.start_pose = _get_param_with_global_fallback(
-            "~moveit/start_pose", "moveit/start_pose", "home"
-        )
-        self.recovery_pose = _get_param_with_global_fallback(
-            "~moveit/recovery_pose", "moveit/recovery_pose", self.start_pose
-        )
+        self.start_pose = rospy.get_param("~moveit/start_pose", "home")
+        self.recovery_pose = rospy.get_param("~moveit/recovery_pose", self.start_pose)
 
         self.executor = MoveItExecutor(
             planning_group=planning_group,
