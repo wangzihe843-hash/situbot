@@ -152,6 +152,13 @@ class ExecutorNode:
     def execute_buffered(self, event=None):
         """Execute all buffered actions in sequence order."""
         if not self._executing.acquire(blocking=False):
+            # Scene updates may briefly hold this lock; retry so buffered actions
+            # are not dropped if timer fires during an objects callback.
+            rospy.Timer(
+                rospy.Duration(0.2),
+                self.execute_buffered,
+                oneshot=True,
+            )
             return
         try:
             self._execute_buffered_inner()
