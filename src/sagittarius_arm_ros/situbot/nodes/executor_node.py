@@ -152,6 +152,13 @@ class ExecutorNode:
     def execute_buffered(self, event=None):
         """Execute all buffered actions in sequence order."""
         if not self._executing.acquire(blocking=False):
+            # Scene updates may briefly hold this lock; retry so buffered actions
+            # are not dropped if timer fires during an objects callback.
+            rospy.Timer(
+                rospy.Duration(0.2),
+                self.execute_buffered,
+                oneshot=True,
+            )
             return
         try:
             self._execute_buffered_inner()
@@ -168,9 +175,25 @@ class ExecutorNode:
 
         rospy.loginfo(f"Executing {len(actions)} actions...")
 
-        rospy.loginfo(f"Safety: releasing gripper and moving to start pose '{self.start_pose}'...")
-        self.executor._gripper_open()
-        self.executor.go_named_pose(self.start_pose)
+        start_pose = getattr(self, "start_pose", "home")
+        recovery_pose = getattr(self, "recovery_pose", start_pose)
+
+        rospy.loginfo(f"Safety: releasing gripper and moving to start pose '{start_pose}'...")
+        if not self.executor._gripper_open():
+            # On real hardware this can be false even when jaws are already open.
+            # Do not abort solely on this signal; verify via start-pose move result.
+            rospy.logwarn(
+                "Safety step warning: gripper open command returned false; "
+                "continuing to start-pose check"
+            )
+        if not self._go_pose(start_pose):
+            self._log_planning_diagnostics(f"safety_move_to_{start_pose}")
+            rospy.logerr(
+                f"Safety step failed: unable to reach start pose '{start_pose}', "
+                "aborting current action batch"
+            )
+            rospy.loginfo(f"Execution complete: 0 succeeded, {len(actions)} failed")
+            return
 
         success_count = 0
         fail_count = 0
@@ -205,11 +228,32 @@ class ExecutorNode:
             else:
                 fail_count += 1
                 rospy.logwarn(f"Action failed: {action.action_type} {label}, "
-                              f"returning to '{self.recovery_pose}' and continuing")
-                self.executor.go_named_pose(self.recovery_pose)
+                              f"returning to '{recovery_pose}' and continuing")
+                if not self._go_pose(recovery_pose):
+                    self._log_planning_diagnostics(
+                        f"recovery_after_{action.action_type}_{obj_id}"
+                    )
 
-        self.executor.go_named_pose(self.recovery_pose)
+        self._go_pose(recovery_pose)
         rospy.loginfo(f"Execution complete: {success_count} succeeded, {fail_count} failed")
+
+    def _go_pose(self, pose_name: str):
+        """Move to a named pose, with compatibility fallback for test doubles."""
+        if hasattr(self.executor, "go_named_pose"):
+            return self.executor.go_named_pose(pose_name)
+        if pose_name == "home" and hasattr(self.executor, "go_home"):
+            return self.executor.go_home()
+        rospy.logwarn(f"Executor missing pose API for '{pose_name}', skipping move")
+        return False
+
+    def _log_planning_diagnostics(self, context: str):
+        """Emit compact diagnostics to help triage runtime planning/collision failures."""
+        scene_count = len(getattr(self.executor, "_scene_objects", {}) or {})
+        rospy.logwarn(
+            f"[diagnostics] context={context}, scene_obstacles={scene_count}, "
+            f"start_pose='{getattr(self, 'start_pose', 'home')}', "
+            f"recovery_pose='{getattr(self, 'recovery_pose', getattr(self, 'start_pose', 'home'))}'"
+        )
 
 
 if __name__ == "__main__":
