@@ -180,12 +180,9 @@ class ExecutorNode:
 
         rospy.loginfo(f"Safety: releasing gripper and moving to start pose '{start_pose}'...")
         if not self.executor._gripper_open():
-            # On real hardware this can be false even when jaws are already open.
-            # Do not abort solely on this signal; verify via start-pose move result.
-            rospy.logwarn(
-                "Safety step warning: gripper open command returned false; "
-                "continuing to start-pose check"
-            )
+            rospy.logerr("Safety step failed: gripper open failed, aborting current action batch")
+            rospy.loginfo(f"Execution complete: 0 succeeded, {len(actions)} failed")
+            return
         if not self._go_pose(start_pose):
             self._log_planning_diagnostics(f"safety_move_to_{start_pose}")
             rospy.logerr(
